@@ -1,0 +1,14 @@
+services:
+  quilly-support:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./documents:/app/documents
+      - quilly-data:/app/backend/data
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  quilly-data:

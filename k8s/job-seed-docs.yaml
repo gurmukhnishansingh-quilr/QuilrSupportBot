@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-documents
+  namespace: quilly-support
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      containers:
+        - name: seed
+          image: localhost:32000/quilly-support:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              if [ -z "$(ls -A /app/documents/)" ]; then
+                echo "PVC is empty — seeding documents..."
+                cp /app/documents-src/*.pdf /app/documents/
+                echo "Done. Copied $(ls /app/documents/ | wc -l) files."
+              else
+                echo "Documents PVC already populated — skipping."
+              fi
+          volumeMounts:
+            - name: documents
+              mountPath: /app/documents
+      restartPolicy: Never
+      volumes:
+        - name: documents
+          persistentVolumeClaim:
+            claimName: quilly-documents
+  backoffLimit: 3
