@@ -16,7 +16,7 @@ microk8s enable dns storage registry
 # 2. Build the Docker image
 echo ""
 echo ">>> Building Docker image..."
-docker build -t quilly-support:latest "$PROJECT_DIR"
+docker build --no-cache -t quilly-support:latest "$PROJECT_DIR"
 
 # 3. Tag and push to MicroK8s local registry
 echo ""
