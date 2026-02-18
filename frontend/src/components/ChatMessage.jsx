@@ -106,6 +106,25 @@ function IframeVideoPlayer({ embedUrl, title, href }) {
   )
 }
 
+function CustomImage({ src, alt }) {
+  return (
+    <img
+      src={src}
+      alt={alt || ''}
+      style={{
+        maxWidth: '100%',
+        maxHeight: '400px',
+        borderRadius: '8px',
+        marginTop: '4px',
+        marginBottom: '4px',
+        objectFit: 'contain',
+        cursor: 'pointer',
+      }}
+      onClick={() => window.open(src, '_blank')}
+    />
+  )
+}
+
 function CustomLink({ href, children }) {
   const title = typeof children === 'string' ? children
     : Array.isArray(children) ? children.map(c => (typeof c === 'string' ? c : '')).join('') : ''
@@ -155,7 +174,7 @@ export default function ChatMessage({ message }) {
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight]}
-              components={{ a: CustomLink }}
+              components={{ a: CustomLink, img: CustomImage }}
             >
               {message.content}
             </ReactMarkdown>

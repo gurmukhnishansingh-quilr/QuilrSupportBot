@@ -30,8 +30,8 @@ COPY documents/ ./documents/
 # Read-only source copy for K8s seed job (PVC mounts over /app/documents)
 COPY documents/ ./documents-src/
 
-# Create data and videos directories
-RUN mkdir -p /app/backend/data /app/videos
+# Create data, videos, and images directories
+RUN mkdir -p /app/backend/data /app/videos /app/images
 
 EXPOSE 8000
 

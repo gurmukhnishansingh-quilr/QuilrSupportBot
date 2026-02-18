@@ -15,6 +15,7 @@ from config import (
     init_db, get_llm_config, update_llm_config,
     list_documents, delete_document, get_document, update_document_link,
     list_video_links, add_video_link, delete_video_link,
+    list_images, add_image, delete_image,
 )
 from embeddings import (
     auto_index_documents, index_pdf, remove_document_embeddings,
@@ -25,6 +26,8 @@ from chat import chat_stream, test_llm_connection
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 VIDEOS_DIR = os.path.join(os.path.dirname(__file__), "..", "videos")
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".ogg", ".mov"}
+IMAGES_DIR = os.path.join(os.path.dirname(__file__), "..", "images")
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 
 
 @asynccontextmanager
@@ -279,6 +282,68 @@ async def serve_video(filename: str):
     filepath = os.path.join(VIDEOS_DIR, filename)
     if not os.path.isfile(filepath):
         raise HTTPException(status_code=404, detail="Video not found")
+    return FileResponse(filepath)
+
+
+# --- Admin Image Routes ---
+
+@app.get("/api/admin/images")
+async def get_images(request: Request, _=Depends(verify_admin)):
+    return list_images()
+
+
+@app.post("/api/admin/images/upload")
+async def upload_images(request: Request, files: list[UploadFile] = File(...),
+                        _=Depends(verify_admin)):
+    import uuid
+    results = []
+    os.makedirs(IMAGES_DIR, exist_ok=True)
+
+    for file in files:
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in IMAGE_EXTENSIONS:
+            results.append({
+                "filename": file.filename,
+                "status": "error",
+                "message": f"Unsupported format. Allowed: {', '.join(IMAGE_EXTENSIONS)}"
+            })
+            continue
+
+        # Use a unique filename to avoid collisions
+        unique_name = f"{uuid.uuid4().hex}{ext}"
+        filepath = os.path.join(IMAGES_DIR, unique_name)
+
+        with open(filepath, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        entry = add_image(filename=unique_name, original_name=file.filename)
+        entry["url"] = f"/api/images/{unique_name}"
+        results.append({**entry, "status": "uploaded"})
+
+    return results
+
+
+@app.delete("/api/admin/images/{image_id}")
+async def remove_image(image_id: int, request: Request, _=Depends(verify_admin)):
+    image = delete_image(image_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    filepath = os.path.join(IMAGES_DIR, image["filename"])
+    if os.path.exists(filepath):
+        os.remove(filepath)
+
+    return {"status": "deleted", "filename": image["original_name"]}
+
+
+# --- Serve Uploaded Images (public, no auth) ---
+
+@app.get("/api/images/{filename}")
+async def serve_image(filename: str):
+    filepath = os.path.join(IMAGES_DIR, filename)
+    if not os.path.isfile(filepath):
+        raise HTTPException(status_code=404, detail="Image not found")
     return FileResponse(filepath)
 
 

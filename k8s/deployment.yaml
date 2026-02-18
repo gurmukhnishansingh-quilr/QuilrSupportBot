@@ -31,6 +31,8 @@ spec:
               mountPath: /app/backend/data
             - name: documents
               mountPath: /app/documents
+            - name: images
+              mountPath: /app/images
           resources:
             requests:
               memory: "512Mi"
@@ -56,3 +58,6 @@ spec:
         - name: documents
           persistentVolumeClaim:
             claimName: quilly-documents
+        - name: images
+          persistentVolumeClaim:
+            claimName: quilly-images

@@ -31,6 +31,7 @@ microk8s kubectl apply -f "$SCRIPT_DIR/namespace.yaml"
 microk8s kubectl apply -f "$SCRIPT_DIR/secret.yaml"
 microk8s kubectl apply -f "$SCRIPT_DIR/pvc-data.yaml"
 microk8s kubectl apply -f "$SCRIPT_DIR/pvc-documents.yaml"
+microk8s kubectl apply -f "$SCRIPT_DIR/pvc-images.yaml"
 
 # Delete previous seed job if it exists (jobs are immutable)
 microk8s kubectl delete job seed-documents -n "$NAMESPACE" --ignore-not-found

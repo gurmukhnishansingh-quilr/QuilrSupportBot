@@ -57,6 +57,14 @@ def init_db():
             description TEXT NOT NULL DEFAULT ''
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL UNIQUE,
+            original_name TEXT NOT NULL,
+            upload_date TEXT NOT NULL
+        )
+    """)
     # Ensure a single config row exists
     cursor.execute("INSERT OR IGNORE INTO llm_config (id) VALUES (1)")
     conn.commit()
@@ -214,3 +222,35 @@ def delete_video_link(link_id: int) -> bool:
     conn.commit()
     conn.close()
     return cursor.rowcount > 0
+
+
+# --- Images ---
+
+def list_images() -> list[dict]:
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM images ORDER BY upload_date DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def add_image(filename: str, original_name: str) -> dict:
+    conn = get_db()
+    now = datetime.utcnow().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO images (filename, original_name, upload_date) VALUES (?, ?, ?)",
+        (filename, original_name, now)
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM images WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def delete_image(image_id: int) -> dict | None:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+    if row:
+        conn.execute("DELETE FROM images WHERE id = ?", (image_id,))
+        conn.commit()
+    conn.close()
+    return dict(row) if row else None

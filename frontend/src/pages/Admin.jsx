@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import LLMConfig from '../components/LLMConfig'
 import FileManager from '../components/FileManager'
+import ImageManager from '../components/ImageManager'
 import VideoLinks from '../components/VideoLinks'
 
 export default function Admin() {
@@ -156,6 +157,7 @@ export default function Admin() {
       }}>
         <LLMConfig password={password} />
         <FileManager password={password} />
+        <ImageManager password={password} />
         <VideoLinks password={password} />
       </div>
     </div>
