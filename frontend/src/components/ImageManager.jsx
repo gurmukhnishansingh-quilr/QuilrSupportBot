@@ -6,6 +6,8 @@ export default function ImageManager({ password }) {
   const [uploading, setUploading] = useState(false)
   const [message, setMessage] = useState(null)
   const [previewImage, setPreviewImage] = useState(null)
+  const [editingDesc, setEditingDesc] = useState(null) // { id, description }
+  const [savingDesc, setSavingDesc] = useState(false)
   const fileInputRef = useRef(null)
 
   const headers = { 'X-Admin-Password': password }
@@ -79,6 +81,23 @@ export default function ImageManager({ password }) {
     setMessage({ type: 'success', text: 'URL copied to clipboard' })
   }
 
+  const saveDescription = async (imageId) => {
+    if (!editingDesc || editingDesc.id !== imageId) return
+    setSavingDesc(true)
+    try {
+      await axios.put(`/api/admin/images/${imageId}/description`,
+        { description: editingDesc.description },
+        { headers }
+      )
+      setEditingDesc(null)
+      loadImages()
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to save description' })
+    } finally {
+      setSavingDesc(false)
+    }
+  }
+
   return (
     <div style={{
       background: 'var(--surface)',
@@ -90,7 +109,7 @@ export default function ImageManager({ password }) {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: '20px',
+        marginBottom: '4px',
       }}>
         <h2 style={{ fontSize: '16px', fontWeight: 600 }}>Image Manager</h2>
         <button
@@ -118,6 +137,9 @@ export default function ImageManager({ password }) {
           style={{ display: 'none' }}
         />
       </div>
+      <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+        Add descriptions so the chatbot can share relevant images with users.
+      </p>
 
       {message && (
         <div style={{
@@ -137,29 +159,30 @@ export default function ImageManager({ password }) {
           No images uploaded yet
         </p>
       ) : (
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-          gap: '12px',
-        }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {images.map(img => (
             <div key={img.id} style={{
+              display: 'flex',
+              gap: '12px',
+              padding: '12px',
               borderRadius: '8px',
-              border: '1px solid var(--border)',
               background: 'var(--bg)',
-              overflow: 'hidden',
+              border: '1px solid var(--border)',
             }}>
+              {/* Thumbnail */}
               <div
                 onClick={() => setPreviewImage(img)}
                 style={{
-                  width: '100%',
-                  height: '120px',
+                  width: '80px',
+                  height: '80px',
+                  flexShrink: 0,
                   overflow: 'hidden',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   background: '#f5f5f5',
+                  borderRadius: '6px',
                 }}
               >
                 <img
@@ -172,30 +195,113 @@ export default function ImageManager({ password }) {
                   }}
                 />
               </div>
-              <div style={{ padding: '8px' }}>
+
+              {/* Details */}
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{
-                  fontSize: '12px',
+                  fontSize: '13px',
                   fontWeight: 500,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
-                  marginBottom: '4px',
                 }}>
                   {img.original_name}
                 </div>
                 <div style={{
                   fontSize: '11px',
                   color: 'var(--text-secondary)',
+                  marginTop: '2px',
                   marginBottom: '6px',
                 }}>
                   {new Date(img.upload_date).toLocaleDateString()}
                 </div>
-                <div style={{ display: 'flex', gap: '4px' }}>
+
+                {/* Description */}
+                {editingDesc && editingDesc.id === img.id ? (
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
+                    <textarea
+                      value={editingDesc.description}
+                      onChange={e => setEditingDesc({ ...editingDesc, description: e.target.value })}
+                      placeholder="Describe this image for the chatbot (e.g. 'Screenshot of the MDM enrollment screen showing step 3')"
+                      rows={2}
+                      style={{
+                        flex: 1,
+                        padding: '6px 8px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border)',
+                        fontSize: '12px',
+                        outline: 'none',
+                        background: 'var(--surface)',
+                        resize: 'vertical',
+                        fontFamily: 'inherit',
+                      }}
+                      autoFocus
+                    />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <button
+                        onClick={() => saveDescription(img.id)}
+                        disabled={savingDesc}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          background: 'var(--primary)',
+                          color: '#fff',
+                          fontSize: '11px',
+                          fontWeight: 500,
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditingDesc(null)}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface)',
+                          color: 'var(--text-secondary)',
+                          fontSize: '11px',
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+                    {img.description ? (
+                      <span style={{ fontSize: '12px', color: 'var(--text)', lineHeight: '1.4' }}>
+                        {img.description}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                        No description
+                      </span>
+                    )}
+                    <button
+                      onClick={() => setEditingDesc({ id: img.id, description: img.description || '' })}
+                      style={{
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--text-secondary)',
+                        fontSize: '11px',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {img.description ? 'Edit' : 'Add'}
+                    </button>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
                   <button
                     onClick={() => copyUrl(img.filename)}
                     style={{
-                      flex: 1,
-                      padding: '4px 6px',
+                      padding: '4px 8px',
                       borderRadius: '4px',
                       border: '1px solid var(--border)',
                       background: 'var(--surface)',
@@ -208,7 +314,7 @@ export default function ImageManager({ password }) {
                   <button
                     onClick={() => deleteImage(img.id, img.original_name)}
                     style={{
-                      padding: '4px 6px',
+                      padding: '4px 8px',
                       borderRadius: '4px',
                       border: '1px solid #FECACA',
                       background: '#FEF2F2',
@@ -262,18 +368,24 @@ export default function ImageManager({ password }) {
               alt={previewImage.original_name}
               style={{
                 maxWidth: '100%',
-                maxHeight: 'calc(90vh - 80px)',
+                maxHeight: 'calc(90vh - 100px)',
                 objectFit: 'contain',
                 borderRadius: '8px',
               }}
             />
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <span style={{ fontSize: '13px', fontWeight: 500 }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '13px', fontWeight: 500 }}>
                 {previewImage.original_name}
-              </span>
+              </div>
+              {previewImage.description && (
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                  {previewImage.description}
+                </div>
+              )}
               <button
                 onClick={() => setPreviewImage(null)}
                 style={{
+                  marginTop: '8px',
                   padding: '6px 16px',
                   borderRadius: '6px',
                   border: '1px solid var(--border)',

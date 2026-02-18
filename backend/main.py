@@ -15,7 +15,7 @@ from config import (
     init_db, get_llm_config, update_llm_config,
     list_documents, delete_document, get_document, update_document_link,
     list_video_links, add_video_link, delete_video_link,
-    list_images, add_image, delete_image,
+    list_images, add_image, update_image_description, delete_image,
 )
 from embeddings import (
     auto_index_documents, index_pdf, remove_document_embeddings,
@@ -85,6 +85,10 @@ class VideoLinkCreate(BaseModel):
 
 class DocumentLinkUpdate(BaseModel):
     link: str = ""
+
+
+class ImageDescriptionUpdate(BaseModel):
+    description: str = ""
 
 
 # --- Chat Routes ---
@@ -335,6 +339,15 @@ async def remove_image(image_id: int, request: Request, _=Depends(verify_admin))
         os.remove(filepath)
 
     return {"status": "deleted", "filename": image["original_name"]}
+
+
+@app.put("/api/admin/images/{image_id}/description")
+async def update_img_description(image_id: int, body: ImageDescriptionUpdate,
+                                  request: Request, _=Depends(verify_admin)):
+    updated = update_image_description(image_id, body.description)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return updated
 
 
 # --- Serve Uploaded Images (public, no auth) ---

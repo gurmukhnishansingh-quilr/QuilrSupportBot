@@ -62,9 +62,14 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             filename TEXT NOT NULL UNIQUE,
             original_name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
             upload_date TEXT NOT NULL
         )
     """)
+    # Migrate images table: add description column if missing
+    img_cols = {r[1] for r in cursor.execute("PRAGMA table_info(images)").fetchall()}
+    if img_cols and "description" not in img_cols:
+        cursor.execute("ALTER TABLE images ADD COLUMN description TEXT NOT NULL DEFAULT ''")
     # Ensure a single config row exists
     cursor.execute("INSERT OR IGNORE INTO llm_config (id) VALUES (1)")
     conn.commit()
@@ -233,17 +238,27 @@ def list_images() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def add_image(filename: str, original_name: str) -> dict:
+def add_image(filename: str, original_name: str,
+              description: str = "") -> dict:
     conn = get_db()
     now = datetime.utcnow().isoformat()
     cursor = conn.execute(
-        "INSERT INTO images (filename, original_name, upload_date) VALUES (?, ?, ?)",
-        (filename, original_name, now)
+        "INSERT INTO images (filename, original_name, description, upload_date) VALUES (?, ?, ?, ?)",
+        (filename, original_name, description, now)
     )
     conn.commit()
     row = conn.execute("SELECT * FROM images WHERE id = ?", (cursor.lastrowid,)).fetchone()
     conn.close()
     return dict(row)
+
+
+def update_image_description(image_id: int, description: str) -> dict | None:
+    conn = get_db()
+    conn.execute("UPDATE images SET description = ? WHERE id = ?", (description, image_id))
+    conn.commit()
+    row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def delete_image(image_id: int) -> dict | None:
