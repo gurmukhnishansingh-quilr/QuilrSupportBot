@@ -27,7 +27,7 @@ When answering:
 - Reference specific steps or sections when relevant
 - If a document has an associated link, mention it so the user can read the full document
 - If the user asks about demos, tutorials, or video guides, share the relevant video links from the list below
-- If the user asks about screenshots, diagrams, or visual references, include the relevant images using markdown image syntax: ![description](url)
+- When an available image/screenshot is relevant to the topic being discussed, ALWAYS include it in your response using markdown image syntax: ![description](url). Do not wait for the user to explicitly ask for images — proactively show them whenever they help illustrate the answer.
 - If the user asks something outside the provided documentation, let them know you can only help with Quilr AI topics covered in the documentation
 
 Context from documentation:
@@ -96,10 +96,10 @@ async def chat_stream(question: str):
     images = list_images()
     images_with_desc = [img for img in images if img.get("description")]
     if images_with_desc:
-        image_lines = ["", "Available images/screenshots:"]
+        image_lines = ["", "Available images/screenshots (use markdown ![alt](url) to display them):"]
         for img in images_with_desc:
             url = f"/api/images/{img['filename']}"
-            line = f"- {img['original_name']}: {img['description']} (image url: {url})"
+            line = f"- {img['description']} → use: ![{img['description']}]({url})"
             image_lines.append(line)
         image_section = "\n".join(image_lines)
     else:

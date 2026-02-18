@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -106,22 +107,111 @@ function IframeVideoPlayer({ embedUrl, title, href }) {
   )
 }
 
-function CustomImage({ src, alt }) {
+function ChatImage({ src, alt }) {
+  const [expanded, setExpanded] = useState(false)
+
   return (
-    <img
-      src={src}
-      alt={alt || ''}
-      style={{
-        maxWidth: '100%',
-        maxHeight: '400px',
-        borderRadius: '8px',
-        marginTop: '4px',
-        marginBottom: '4px',
-        objectFit: 'contain',
-        cursor: 'pointer',
-      }}
-      onClick={() => window.open(src, '_blank')}
-    />
+    <>
+      <div
+        style={{
+          margin: '8px 0',
+          borderRadius: '8px',
+          overflow: 'hidden',
+          border: '1px solid var(--border)',
+          background: '#f8f8f8',
+          cursor: 'pointer',
+        }}
+        onClick={() => setExpanded(true)}
+      >
+        <img
+          src={src}
+          alt={alt || ''}
+          style={{
+            display: 'block',
+            maxWidth: '100%',
+            maxHeight: '300px',
+            objectFit: 'contain',
+            margin: '0 auto',
+          }}
+        />
+        {alt && (
+          <div style={{
+            padding: '6px 10px',
+            fontSize: '11px',
+            color: 'var(--text-secondary)',
+            borderTop: '1px solid var(--border)',
+            background: 'var(--surface)',
+          }}>
+            {alt}
+          </div>
+        )}
+      </div>
+
+      {expanded && (
+        <div
+          onClick={() => setExpanded(false)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0,0,0,0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: '24px',
+            cursor: 'zoom-out',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--surface)',
+              borderRadius: '12px',
+              padding: '12px',
+              maxWidth: '90vw',
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            <img
+              src={src}
+              alt={alt || ''}
+              style={{
+                maxWidth: '100%',
+                maxHeight: 'calc(90vh - 80px)',
+                objectFit: 'contain',
+                borderRadius: '8px',
+              }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              {alt && (
+                <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{alt}</span>
+              )}
+              <button
+                onClick={() => setExpanded(false)}
+                style={{
+                  padding: '5px 14px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
@@ -174,7 +264,7 @@ export default function ChatMessage({ message }) {
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight]}
-              components={{ a: CustomLink, img: CustomImage }}
+              components={{ a: CustomLink, img: ChatImage }}
             >
               {message.content}
             </ReactMarkdown>
