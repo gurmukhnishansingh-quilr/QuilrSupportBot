@@ -1,8 +1,9 @@
 import os
 import shutil
+import re
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +27,9 @@ from chat import chat_stream, test_llm_connection
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 VIDEOS_DIR = os.path.join(os.path.dirname(__file__), "..", "videos")
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".ogg", ".mov"}
+TRANSCRIPT_EXTENSIONS = {".txt", ".srt", ".vtt", ".md"}
+MAX_TRANSCRIPT_BYTES = 1_000_000
+MAX_TRANSCRIPT_CHARS = 30_000
 IMAGES_DIR = os.path.join(os.path.dirname(__file__), "..", "images")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 
@@ -81,6 +85,7 @@ class VideoLinkCreate(BaseModel):
     title: str
     url: str
     description: str = ""
+    transcript: str = ""
 
 
 class DocumentLinkUpdate(BaseModel):
@@ -89,6 +94,65 @@ class DocumentLinkUpdate(BaseModel):
 
 class ImageDescriptionUpdate(BaseModel):
     description: str = ""
+
+
+# --- Helpers ---
+
+def _clean_transcript_text(text: str, ext: str) -> str:
+    if ext not in {".srt", ".vtt"}:
+        return text.strip()
+
+    cleaned_lines = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            cleaned_lines.append("")
+            continue
+
+        if stripped.upper() == "WEBVTT":
+            continue
+        if stripped.startswith("NOTE"):
+            continue
+        if re.fullmatch(r"\d+", stripped):
+            continue
+        if "-->" in stripped:
+            continue
+
+        cleaned_lines.append(stripped)
+
+    cleaned = "\n".join(cleaned_lines)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _normalize_transcript_text(text: str) -> str:
+    transcript = (text or "").strip()
+    if len(transcript) > MAX_TRANSCRIPT_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Transcript is too long. Maximum {MAX_TRANSCRIPT_CHARS} characters."
+        )
+    return transcript
+
+
+async def _read_transcript_upload(transcript_file: UploadFile) -> str:
+    ext = os.path.splitext(transcript_file.filename or "")[1].lower()
+    if ext not in TRANSCRIPT_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported transcript format. Allowed: {', '.join(sorted(TRANSCRIPT_EXTENSIONS))}"
+        )
+
+    content = await transcript_file.read()
+    if len(content) > MAX_TRANSCRIPT_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Transcript file is too large. Maximum {MAX_TRANSCRIPT_BYTES // 1_000_000} MB."
+        )
+
+    text = content.decode("utf-8-sig", errors="replace")
+    cleaned = _clean_transcript_text(text, ext)
+    return _normalize_transcript_text(cleaned)
 
 
 # --- Chat Routes ---
@@ -238,16 +302,22 @@ async def get_video_links(request: Request, _=Depends(verify_admin)):
 async def create_video_link(link: VideoLinkCreate, request: Request,
                             _=Depends(verify_admin)):
     return add_video_link(title=link.title, url=link.url,
-                          description=link.description)
+                          description=link.description,
+                          transcript=_normalize_transcript_text(link.transcript))
 
 
 @app.post("/api/admin/video-links/upload")
 async def upload_video(request: Request, file: UploadFile = File(...),
+                       transcript_file: UploadFile | None = File(None),
+                       transcript_text: str = Form(""),
                        _=Depends(verify_admin)):
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in VIDEO_EXTENSIONS:
         raise HTTPException(status_code=400,
                             detail=f"Unsupported format. Allowed: {', '.join(VIDEO_EXTENSIONS)}")
+    if transcript_file and transcript_text.strip():
+        raise HTTPException(status_code=400,
+                            detail="Provide either transcript file or transcript text, not both.")
 
     os.makedirs(VIDEOS_DIR, exist_ok=True)
     filepath = os.path.join(VIDEOS_DIR, file.filename)
@@ -255,10 +325,15 @@ async def upload_video(request: Request, file: UploadFile = File(...),
         content = await file.read()
         f.write(content)
 
+    transcript = _normalize_transcript_text(transcript_text)
+    if transcript_file:
+        transcript = await _read_transcript_upload(transcript_file)
+
     # Auto-create a video link entry pointing to the served file
     title = os.path.splitext(file.filename)[0].replace("-", " ").replace("_", " ")
     video_url = f"/api/videos/{file.filename}"
-    entry = add_video_link(title=title, url=video_url, description="Uploaded video")
+    entry = add_video_link(title=title, url=video_url, description="Uploaded video",
+                           transcript=transcript)
     return entry
 
 

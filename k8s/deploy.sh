@@ -5,24 +5,54 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 IMAGE="localhost:32000/quilly-support:latest"
 NAMESPACE="quilly-support"
+APP_DEPLOYMENT="quilly-support"
+SEED_JOB="seed-documents"
+FORCE_SEED_DOCS="${FORCE_SEED_DOCS:-false}"
+SKIP_BUILD="${SKIP_BUILD:-false}"
+BUILD_NO_CACHE="${BUILD_NO_CACHE:-false}"
+SKIP_ADDONS="${SKIP_ADDONS:-false}"
+
+ensure_addon() {
+  local addon="$1"
+  if microk8s status --wait-ready 2>/dev/null | grep -qE "^[[:space:]]*${addon}:[[:space:]]+enabled$"; then
+    echo ">>> Addon '${addon}' already enabled."
+  else
+    echo ">>> Enabling addon '${addon}'..."
+    microk8s enable "$addon"
+  fi
+}
 
 echo "=== Quilly Support — MicroK8s Deploy ==="
 
 # 1. Enable required MicroK8s addons
 echo ""
-echo ">>> Enabling MicroK8s addons (dns, storage, registry)..."
-microk8s enable dns storage registry
+if [ "$SKIP_ADDONS" = "true" ]; then
+  echo ">>> SKIP_ADDONS=true — skipping addon checks."
+else
+  echo ">>> Ensuring MicroK8s addons (dns, storage, registry)..."
+  ensure_addon dns
+  ensure_addon storage
+  ensure_addon registry
+fi
 
 # 2. Build the Docker image
 echo ""
-echo ">>> Building Docker image..."
-docker build --no-cache -t quilly-support:latest "$PROJECT_DIR"
+if [ "$SKIP_BUILD" = "true" ]; then
+  echo ">>> SKIP_BUILD=true — skipping image build and push."
+else
+  echo ">>> Building Docker image..."
+  BUILD_FLAGS=()
+  if [ "$BUILD_NO_CACHE" = "true" ]; then
+    BUILD_FLAGS+=(--no-cache)
+  fi
+  docker build "${BUILD_FLAGS[@]}" -t quilly-support:latest "$PROJECT_DIR"
 
-# 3. Tag and push to MicroK8s local registry
-echo ""
-echo ">>> Pushing image to local registry ($IMAGE)..."
-docker tag quilly-support:latest "$IMAGE"
-docker push "$IMAGE"
+  # 3. Tag and push to MicroK8s local registry
+  echo ""
+  echo ">>> Pushing image to local registry ($IMAGE)..."
+  docker tag quilly-support:latest "$IMAGE"
+  docker push "$IMAGE"
+fi
 
 # 4. Apply Kubernetes manifests in order
 echo ""
@@ -33,13 +63,24 @@ microk8s kubectl apply -f "$SCRIPT_DIR/pvc-data.yaml"
 microk8s kubectl apply -f "$SCRIPT_DIR/pvc-documents.yaml"
 microk8s kubectl apply -f "$SCRIPT_DIR/pvc-images.yaml"
 
-# Delete previous seed job if it exists (jobs are immutable)
-microk8s kubectl delete job seed-documents -n "$NAMESPACE" --ignore-not-found
-microk8s kubectl apply -f "$SCRIPT_DIR/job-seed-docs.yaml"
-
-echo ">>> Waiting for seed job to complete..."
-microk8s kubectl wait --for=condition=complete job/seed-documents \
-  -n "$NAMESPACE" --timeout=120s
+# Seed docs only on first install (or when explicitly forced) to avoid
+# repeatedly triggering document indexing during normal redeploys.
+if [ "$FORCE_SEED_DOCS" = "true" ]; then
+  echo ">>> FORCE_SEED_DOCS=true — rerunning seed job..."
+  microk8s kubectl delete job "$SEED_JOB" -n "$NAMESPACE" --ignore-not-found
+  microk8s kubectl apply -f "$SCRIPT_DIR/job-seed-docs.yaml"
+  echo ">>> Waiting for seed job to complete..."
+  microk8s kubectl wait --for=condition=complete "job/$SEED_JOB" \
+    -n "$NAMESPACE" --timeout=120s
+elif microk8s kubectl get deployment "$APP_DEPLOYMENT" -n "$NAMESPACE" >/dev/null 2>&1; then
+  echo ">>> Existing deployment found — skipping seed job to avoid re-indexing."
+else
+  echo ">>> First deploy detected — running seed job..."
+  microk8s kubectl apply -f "$SCRIPT_DIR/job-seed-docs.yaml"
+  echo ">>> Waiting for seed job to complete..."
+  microk8s kubectl wait --for=condition=complete "job/$SEED_JOB" \
+    -n "$NAMESPACE" --timeout=120s
+fi
 
 microk8s kubectl apply -f "$SCRIPT_DIR/deployment.yaml"
 microk8s kubectl apply -f "$SCRIPT_DIR/service.yaml"

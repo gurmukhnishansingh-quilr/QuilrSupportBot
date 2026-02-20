@@ -54,9 +54,14 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
             url TEXT NOT NULL,
-            description TEXT NOT NULL DEFAULT ''
+            description TEXT NOT NULL DEFAULT '',
+            transcript TEXT NOT NULL DEFAULT ''
         )
     """)
+    # Migrate video_links table: add transcript column if missing
+    video_cols = {r[1] for r in cursor.execute("PRAGMA table_info(video_links)").fetchall()}
+    if video_cols and "transcript" not in video_cols:
+        cursor.execute("ALTER TABLE video_links ADD COLUMN transcript TEXT NOT NULL DEFAULT ''")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS images (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,11 +212,12 @@ def list_video_links() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def add_video_link(title: str, url: str, description: str = "") -> dict:
+def add_video_link(title: str, url: str, description: str = "",
+                   transcript: str = "") -> dict:
     conn = get_db()
     cursor = conn.execute(
-        "INSERT INTO video_links (title, url, description) VALUES (?, ?, ?)",
-        (title, url, description)
+        "INSERT INTO video_links (title, url, description, transcript) VALUES (?, ?, ?, ?)",
+        (title, url, description, transcript)
     )
     conn.commit()
     row = conn.execute(

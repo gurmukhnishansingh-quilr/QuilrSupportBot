@@ -3,11 +3,14 @@ import axios from 'axios'
 
 export default function VideoLinks({ password }) {
   const [links, setLinks] = useState([])
-  const [form, setForm] = useState({ title: '', url: '', description: '' })
+  const [form, setForm] = useState({ title: '', url: '', description: '', transcript: '' })
   const [adding, setAdding] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [uploadVideoFile, setUploadVideoFile] = useState(null)
+  const [uploadTranscriptFile, setUploadTranscriptFile] = useState(null)
   const [message, setMessage] = useState(null)
-  const fileInputRef = useRef(null)
+  const videoInputRef = useRef(null)
+  const transcriptInputRef = useRef(null)
 
   const headers = { 'X-Admin-Password': password }
 
@@ -31,11 +34,12 @@ export default function VideoLinks({ password }) {
     setMessage(null)
     try {
       await axios.post('/api/admin/video-links', form, { headers })
-      setForm({ title: '', url: '', description: '' })
+      setForm({ title: '', url: '', description: '', transcript: '' })
       setMessage({ type: 'success', text: 'Video link added' })
       loadLinks()
-    } catch {
-      setMessage({ type: 'error', text: 'Failed to add video link' })
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Failed to add video link'
+      setMessage({ type: 'error', text: detail })
     } finally {
       setAdding(false)
     }
@@ -50,25 +54,31 @@ export default function VideoLinks({ password }) {
     }
   }
 
-  const uploadVideo = async (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+  const uploadVideo = async () => {
+    if (!uploadVideoFile) return
     setUploading(true)
     setMessage(null)
     const formData = new FormData()
-    formData.append('file', file)
+    formData.append('file', uploadVideoFile)
+    if (uploadTranscriptFile) {
+      formData.append('transcript_file', uploadTranscriptFile)
+    }
     try {
       await axios.post('/api/admin/video-links/upload', formData, {
         headers: { ...headers, 'Content-Type': 'multipart/form-data' },
       })
-      setMessage({ type: 'success', text: `Uploaded "${file.name}"` })
+      const transcriptNote = uploadTranscriptFile ? ' with transcript' : ''
+      setMessage({ type: 'success', text: `Uploaded "${uploadVideoFile.name}"${transcriptNote}` })
       loadLinks()
     } catch (err) {
       const detail = err.response?.data?.detail || 'Upload failed'
       setMessage({ type: 'error', text: detail })
     } finally {
       setUploading(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
+      setUploadVideoFile(null)
+      setUploadTranscriptFile(null)
+      if (videoInputRef.current) videoInputRef.current.value = ''
+      if (transcriptInputRef.current) transcriptInputRef.current.value = ''
     }
   }
 
@@ -97,37 +107,91 @@ export default function VideoLinks({ password }) {
       border: '1px solid var(--border)',
       padding: '24px',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+      <div style={{ marginBottom: '4px' }}>
         <h2 style={{ fontSize: '16px', fontWeight: 600 }}>
           Video Links
         </h2>
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
-          style={{
-            padding: '6px 14px',
-            borderRadius: '8px',
-            border: 'none',
-            background: 'var(--primary)',
-            color: '#fff',
-            fontSize: '13px',
-            fontWeight: 500,
-            opacity: uploading ? 0.6 : 1,
-          }}
-        >
-          {uploading ? 'Uploading...' : 'Upload Video'}
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".mp4,.webm,.ogg,.mov"
-          onChange={uploadVideo}
-          style={{ display: 'none' }}
-        />
       </div>
       <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '20px' }}>
         Upload videos or add external links (YouTube, Vimeo). Quilly will share these when users ask for demos.
       </p>
+
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '10px',
+        padding: '12px',
+        borderRadius: '8px',
+        background: 'var(--bg)',
+        border: '1px solid var(--border)',
+        marginBottom: '20px',
+      }}>
+        <div style={{ fontSize: '13px', fontWeight: 600 }}>Upload Local Video</div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => videoInputRef.current?.click()}
+            disabled={uploading}
+            style={{
+              padding: '6px 12px',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              color: 'var(--text)',
+              fontSize: '12px',
+            }}
+          >
+            {uploadVideoFile ? 'Change Video' : 'Select Video'}
+          </button>
+          <button
+            onClick={() => transcriptInputRef.current?.click()}
+            disabled={uploading}
+            style={{
+              padding: '6px 12px',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              color: 'var(--text)',
+              fontSize: '12px',
+            }}
+          >
+            {uploadTranscriptFile ? 'Change Transcript' : 'Add Transcript (Optional)'}
+          </button>
+          <button
+            onClick={uploadVideo}
+            disabled={uploading || !uploadVideoFile}
+            style={{
+              padding: '6px 12px',
+              borderRadius: '8px',
+              border: 'none',
+              background: 'var(--primary)',
+              color: '#fff',
+              fontSize: '12px',
+              opacity: uploading || !uploadVideoFile ? 0.6 : 1,
+            }}
+          >
+            {uploading ? 'Uploading...' : 'Upload Video'}
+          </button>
+        </div>
+        <input
+          ref={videoInputRef}
+          type="file"
+          accept=".mp4,.webm,.ogg,.mov"
+          onChange={e => setUploadVideoFile(e.target.files?.[0] || null)}
+          style={{ display: 'none' }}
+        />
+        <input
+          ref={transcriptInputRef}
+          type="file"
+          accept=".txt,.srt,.vtt,.md"
+          onChange={e => setUploadTranscriptFile(e.target.files?.[0] || null)}
+          style={{ display: 'none' }}
+        />
+        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+          {uploadVideoFile ? `Video: ${uploadVideoFile.name}` : 'No video selected'}
+          {' · '}
+          {uploadTranscriptFile ? `Transcript: ${uploadTranscriptFile.name}` : 'No transcript selected'}
+        </div>
+      </div>
 
       {/* Existing links */}
       {links.length > 0 && (
@@ -173,6 +237,11 @@ export default function VideoLinks({ password }) {
                 {link.description && (
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
                     {link.description}
+                  </div>
+                )}
+                {link.transcript && (
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                    Transcript attached
                   </div>
                 )}
               </div>
@@ -226,6 +295,15 @@ export default function VideoLinks({ password }) {
               value={form.description}
               onChange={e => setForm({ ...form, description: e.target.value })}
               placeholder="Brief description of the video content"
+            />
+          </div>
+          <div>
+            <label style={labelStyle}>Transcript (optional)</label>
+            <textarea
+              style={{ ...inputStyle, minHeight: '96px', resize: 'vertical' }}
+              value={form.transcript}
+              onChange={e => setForm({ ...form, transcript: e.target.value })}
+              placeholder="Paste transcript text so Quilly can understand the video context"
             />
           </div>
         </div>

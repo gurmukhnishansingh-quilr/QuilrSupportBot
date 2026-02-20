@@ -3,6 +3,9 @@ from openai import OpenAI, AzureOpenAI
 from config import get_llm_config, list_video_links, get_document_links, list_images
 from embeddings import search_similar
 
+VIDEO_TRANSCRIPT_SNIPPET_CHARS = 1200
+VIDEO_TRANSCRIPT_TOTAL_CHARS = 4000
+
 
 def _get_client(config):
     """Return the appropriate OpenAI client based on provider_type."""
@@ -64,6 +67,23 @@ def build_context(chunks: list[dict]) -> tuple[str, list[dict]]:
     return "\n\n---\n\n".join(context_parts), sources
 
 
+def _build_transcript_snippet(transcript: str) -> str:
+    compact = " ".join((transcript or "").split())
+    if len(compact) <= VIDEO_TRANSCRIPT_SNIPPET_CHARS:
+        return compact
+    return compact[:VIDEO_TRANSCRIPT_SNIPPET_CHARS].rstrip() + "..."
+
+
+def _trim_snippet_to_budget(snippet: str, remaining_chars: int) -> str:
+    if remaining_chars <= 0:
+        return ""
+    if len(snippet) <= remaining_chars:
+        return snippet
+    if remaining_chars <= 3:
+        return snippet[:remaining_chars]
+    return snippet[:remaining_chars - 3].rstrip() + "..."
+
+
 async def chat_stream(question: str):
     """RAG pipeline: retrieve context, call LLM, yield streamed response."""
     config = get_llm_config()
@@ -83,11 +103,18 @@ async def chat_stream(question: str):
     videos = list_video_links()
     if videos:
         video_lines = ["", "Available demo/tutorial videos:"]
+        transcript_budget = VIDEO_TRANSCRIPT_TOTAL_CHARS
         for v in videos:
             line = f"- {v['title']}: {v['url']}"
             if v.get("description"):
                 line += f" — {v['description']}"
             video_lines.append(line)
+            if v.get("transcript") and transcript_budget > 0:
+                snippet = _build_transcript_snippet(v["transcript"])
+                snippet = _trim_snippet_to_budget(snippet, transcript_budget)
+                if snippet:
+                    video_lines.append(f"  Transcript snippet: {snippet}")
+                    transcript_budget -= len(snippet)
         video_section = "\n".join(video_lines)
     else:
         video_section = ""
