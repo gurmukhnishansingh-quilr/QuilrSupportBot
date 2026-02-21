@@ -1,32 +1,181 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import LLMConfig from '../components/LLMConfig'
 import FileManager from '../components/FileManager'
 import ImageManager from '../components/ImageManager'
 import VideoLinks from '../components/VideoLinks'
+import PasswordSettings from '../components/PasswordSettings'
+
+const ADMIN_SESSION_STORAGE_KEY = 'adminSessionToken'
+
+function SectionIcon({ id }) {
+  const iconProps = {
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.8,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    width: 18,
+    height: 18,
+    'aria-hidden': true,
+  }
+
+  switch (id) {
+    case 'documents':
+      return (
+        <svg {...iconProps}>
+          <path d="M7 3h7l5 5v13H7z" />
+          <path d="M14 3v5h5" />
+          <path d="M9 13h8M9 17h6" />
+        </svg>
+      )
+    case 'images':
+      return (
+        <svg {...iconProps}>
+          <rect x="3" y="4" width="18" height="16" rx="3" />
+          <circle cx="9" cy="10" r="1.6" />
+          <path d="M5 17l4-4 3 3 4-5 3 4" />
+        </svg>
+      )
+    case 'videos':
+      return (
+        <svg {...iconProps}>
+          <rect x="3" y="5" width="18" height="14" rx="3" />
+          <path d="M10 10l6 4-6 4z" />
+        </svg>
+      )
+    case 'settings':
+      return (
+        <svg {...iconProps}>
+          <circle cx="12" cy="12" r="3.5" />
+          <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.2 2.2M16.2 16.2l2.2 2.2M18.4 5.6l-2.2 2.2M7.8 16.2l-2.2 2.2" />
+        </svg>
+      )
+    case 'llm':
+    default:
+      return (
+        <svg {...iconProps}>
+          <rect x="3" y="3" width="18" height="18" rx="4" />
+          <path d="M8 9h8M8 12h8M8 15h5" />
+        </svg>
+      )
+  }
+}
 
 export default function Admin() {
   const [password, setPassword] = useState('')
+  const [sessionToken, setSessionToken] = useState('')
   const [authenticated, setAuthenticated] = useState(false)
-  const [authError, setAuthError] = useState(false)
+  const [authError, setAuthError] = useState('')
+  const [authChecking, setAuthChecking] = useState(true)
+  const [authLoading, setAuthLoading] = useState(false)
+  const [activeSection, setActiveSection] = useState('llm')
+  const [isNavigatorCollapsed, setIsNavigatorCollapsed] = useState(false)
+
+  const authHeaders = sessionToken ? { 'X-Admin-Session': sessionToken } : {}
+
+  const applySession = (token) => {
+    setSessionToken(token)
+    setAuthenticated(true)
+    localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, token)
+  }
+
+  const clearSession = () => {
+    setSessionToken('')
+    setAuthenticated(false)
+    localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY)
+  }
+
+  const validateSession = async (token) => {
+    try {
+      const res = await fetch('/api/admin/auth/session', {
+        headers: { 'X-Admin-Session': token },
+      })
+      return res.ok
+    } catch {
+      return false
+    }
+  }
+
+  useEffect(() => {
+    const boot = async () => {
+      const storedToken = localStorage.getItem(ADMIN_SESSION_STORAGE_KEY)
+      if (!storedToken) {
+        setAuthChecking(false)
+        return
+      }
+
+      const valid = await validateSession(storedToken)
+      if (valid) {
+        setSessionToken(storedToken)
+        setAuthenticated(true)
+      } else {
+        localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY)
+      }
+      setAuthChecking(false)
+    }
+
+    boot()
+  }, [])
 
   const handleLogin = async (e) => {
     e.preventDefault()
-    setAuthError(false)
+    setAuthError('')
+    setAuthLoading(true)
 
-    // Validate by trying to fetch config
     try {
-      const res = await fetch('/api/admin/config', {
-        headers: { 'X-Admin-Password': password },
+      const res = await fetch('/api/admin/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
       })
-      if (res.ok) {
-        setAuthenticated(true)
-      } else {
-        setAuthError(true)
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        setAuthError(body.detail || 'Invalid password')
+        setAuthLoading(false)
+        return
+      }
+      const data = await res.json()
+      applySession(data.session_token)
+      setPassword('')
+    } catch {
+      setAuthError('Login failed')
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      if (sessionToken) {
+        await fetch('/api/admin/auth/logout', {
+          method: 'POST',
+          headers: { 'X-Admin-Session': sessionToken },
+        })
       }
     } catch {
-      setAuthError(true)
+      // Logout should clear local session even if request fails
+    } finally {
+      clearSession()
+      setPassword('')
     }
+  }
+
+  if (authChecking) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '100vh',
+        background: 'var(--bg)',
+        color: 'var(--text-secondary)',
+        fontSize: '14px',
+      }}>
+        Checking session...
+      </div>
+    )
   }
 
   if (!authenticated) {
@@ -77,23 +226,25 @@ export default function Admin() {
             />
             {authError && (
               <p style={{ fontSize: '13px', color: 'var(--error)', marginBottom: '12px' }}>
-                Invalid password
+                {authError}
               </p>
             )}
             <button
               type="submit"
+              disabled={authLoading}
               style={{
                 width: '100%',
                 padding: '12px',
                 borderRadius: '10px',
                 border: 'none',
                 background: 'var(--primary)',
-                color: '#fff',
+                color: 'var(--on-primary)',
                 fontSize: '14px',
                 fontWeight: 500,
+                opacity: authLoading ? 0.6 : 1,
               }}
             >
-              Sign In
+              {authLoading ? 'Signing In...' : 'Sign In'}
             </button>
           </form>
 
@@ -111,12 +262,57 @@ export default function Admin() {
     )
   }
 
+  const sections = [
+    {
+      id: 'llm',
+      label: 'LLM Configuration',
+      description: 'Provider, model, and connection settings',
+    },
+    {
+      id: 'documents',
+      label: 'Documents',
+      description: 'Upload, index, and manage PDF docs',
+    },
+    {
+      id: 'images',
+      label: 'Images',
+      description: 'Upload screenshots and describe them',
+    },
+    {
+      id: 'videos',
+      label: 'Videos',
+      description: 'Manage demo links, uploads, and transcripts',
+    },
+    {
+      id: 'settings',
+      label: 'Settings',
+      description: 'Manage security and admin password',
+    },
+  ]
+
+  const activeMeta = sections.find(section => section.id === activeSection)
+
+  const renderActiveSection = () => {
+    switch (activeSection) {
+      case 'documents':
+        return <FileManager authHeaders={authHeaders} />
+      case 'images':
+        return <ImageManager authHeaders={authHeaders} />
+      case 'videos':
+        return <VideoLinks authHeaders={authHeaders} />
+      case 'settings':
+        return <PasswordSettings authHeaders={authHeaders} onSessionUpdate={applySession} />
+      case 'llm':
+      default:
+        return <LLMConfig authHeaders={authHeaders} />
+    }
+  }
+
   return (
     <div style={{
       minHeight: '100vh',
       background: 'var(--bg)',
     }}>
-      {/* Header */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -130,35 +326,103 @@ export default function Admin() {
           <div>
             <h1 style={{ fontSize: '18px', fontWeight: 600 }}>Admin Console</h1>
             <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              Manage LLM settings and documents
+              Manage LLM settings, content, and security
             </p>
           </div>
         </div>
-        <Link to="/" style={{
-          fontSize: '13px',
-          color: 'var(--text-secondary)',
-          textDecoration: 'none',
-          padding: '6px 12px',
-          borderRadius: '6px',
-          border: '1px solid var(--border)',
-        }}>
-          Back to Chat
-        </Link>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={handleLogout}
+            style={{
+              fontSize: '13px',
+              color: 'var(--text-secondary)',
+              padding: '6px 12px',
+              borderRadius: '6px',
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+            }}
+          >
+            Sign Out
+          </button>
+          <Link to="/" style={{
+            fontSize: '13px',
+            color: 'var(--text-secondary)',
+            textDecoration: 'none',
+            padding: '6px 12px',
+            borderRadius: '6px',
+            border: '1px solid var(--border)',
+          }}>
+            Back to Chat
+          </Link>
+        </div>
       </div>
 
-      {/* Content */}
-      <div style={{
-        maxWidth: '800px',
-        margin: '0 auto',
-        padding: '24px 20px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '24px',
-      }}>
-        <LLMConfig password={password} />
-        <FileManager password={password} />
-        <ImageManager password={password} />
-        <VideoLinks password={password} />
+      <div className="admin-fullscreen">
+        <div className={`admin-layout ${isNavigatorCollapsed ? 'sidebar-collapsed' : ''}`}>
+          <aside className={`admin-sidebar ${isNavigatorCollapsed ? 'collapsed' : ''}`}>
+            <div className="admin-sidebar-header">
+              <div className="admin-sidebar-title">Navigator</div>
+              <button
+                type="button"
+                className="admin-sidebar-toggle"
+                onClick={() => setIsNavigatorCollapsed(prev => !prev)}
+                aria-label={isNavigatorCollapsed ? 'Expand navigator' : 'Collapse navigator'}
+                title={isNavigatorCollapsed ? 'Expand navigator' : 'Collapse navigator'}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  width="16"
+                  height="16"
+                  aria-hidden="true"
+                >
+                  {isNavigatorCollapsed ? (
+                    <path d="M9 6l6 6-6 6" />
+                  ) : (
+                    <path d="M15 6l-6 6 6 6" />
+                  )}
+                </svg>
+              </button>
+            </div>
+            <div className="admin-nav-list">
+              {sections.map((section) => {
+                const active = activeSection === section.id
+                return (
+                  <button
+                    key={section.id}
+                    onClick={() => setActiveSection(section.id)}
+                    className={`admin-nav-btn ${active ? 'active' : ''}`}
+                    title={isNavigatorCollapsed ? section.label : undefined}
+                  >
+                    <div className="admin-nav-icon">
+                      <SectionIcon id={section.id} />
+                    </div>
+                    <div className="admin-nav-copy">
+                      <div className="admin-nav-title">{section.label}</div>
+                      <div className="admin-nav-description">{section.description}</div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </aside>
+
+          <div className="admin-panel">
+            <div style={{ marginBottom: '14px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: 600 }}>
+                {activeMeta?.label}
+              </h2>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                {activeMeta?.description}
+              </p>
+            </div>
+            {renderActiveSection()}
+          </div>
+        </div>
       </div>
     </div>
   )

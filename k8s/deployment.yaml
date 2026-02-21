@@ -18,6 +18,7 @@ spec:
       containers:
         - name: quilly-support
           image: localhost:32000/quilly-support:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
           env:

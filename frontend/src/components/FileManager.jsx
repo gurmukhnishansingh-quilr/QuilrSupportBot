@@ -1,14 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 
-export default function FileManager({ password }) {
+export default function FileManager({ authHeaders }) {
   const [documents, setDocuments] = useState([])
   const [uploading, setUploading] = useState(false)
   const [reindexing, setReindexing] = useState(false)
   const [message, setMessage] = useState(null)
   const fileInputRef = useRef(null)
 
-  const headers = { 'X-Admin-Password': password }
+  const headers = authHeaders || {}
 
   useEffect(() => {
     loadDocuments()
@@ -135,7 +135,7 @@ export default function FileManager({ password }) {
               borderRadius: '8px',
               border: 'none',
               background: 'var(--primary)',
-              color: '#fff',
+              color: 'var(--on-primary)',
               fontSize: '13px',
               fontWeight: 500,
               opacity: uploading ? 0.6 : 1,
@@ -176,7 +176,8 @@ export default function FileManager({ password }) {
           padding: '8px 12px',
           borderRadius: '8px',
           fontSize: '13px',
-          background: message.type === 'error' ? '#FEF2F2' : '#F0FDF4',
+          background: message.type === 'error' ? 'var(--status-error-bg)' : 'var(--status-success-bg)',
+          border: `1px solid ${message.type === 'error' ? 'var(--status-error-border)' : 'var(--status-success-border)'}`,
           color: message.type === 'error' ? 'var(--error)' : 'var(--success)',
         }}>
           {message.text}
@@ -220,8 +221,8 @@ export default function FileManager({ password }) {
                   style={{
                     padding: '6px 12px',
                     borderRadius: '6px',
-                    border: '1px solid #FECACA',
-                    background: '#FEF2F2',
+                    border: '1px solid var(--danger-soft-border)',
+                    background: 'var(--danger-soft-bg)',
                     color: 'var(--error)',
                     fontSize: '12px',
                     fontWeight: 500,
@@ -261,7 +262,7 @@ export default function FileManager({ password }) {
                         borderRadius: '6px',
                         border: 'none',
                         background: 'var(--primary)',
-                        color: '#fff',
+                        color: 'var(--on-primary)',
                         fontSize: '11px',
                         fontWeight: 500,
                       }}

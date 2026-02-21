@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 
-export default function ImageManager({ password }) {
+export default function ImageManager({ authHeaders }) {
   const [images, setImages] = useState([])
   const [uploading, setUploading] = useState(false)
   const [message, setMessage] = useState(null)
@@ -10,7 +10,7 @@ export default function ImageManager({ password }) {
   const [savingDesc, setSavingDesc] = useState(false)
   const fileInputRef = useRef(null)
 
-  const headers = { 'X-Admin-Password': password }
+  const headers = authHeaders || {}
 
   useEffect(() => {
     loadImages()
@@ -120,7 +120,7 @@ export default function ImageManager({ password }) {
             borderRadius: '8px',
             border: 'none',
             background: 'var(--primary)',
-            color: '#fff',
+            color: 'var(--on-primary)',
             fontSize: '13px',
             fontWeight: 500,
             opacity: uploading ? 0.6 : 1,
@@ -147,7 +147,8 @@ export default function ImageManager({ password }) {
           padding: '8px 12px',
           borderRadius: '8px',
           fontSize: '13px',
-          background: message.type === 'error' ? '#FEF2F2' : '#F0FDF4',
+          background: message.type === 'error' ? 'var(--status-error-bg)' : 'var(--status-success-bg)',
+          border: `1px solid ${message.type === 'error' ? 'var(--status-error-border)' : 'var(--status-success-border)'}`,
           color: message.type === 'error' ? 'var(--error)' : 'var(--success)',
         }}>
           {message.text}
@@ -181,7 +182,7 @@ export default function ImageManager({ password }) {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  background: '#f5f5f5',
+                  background: 'var(--media-bg)',
                   borderRadius: '6px',
                 }}
               >
@@ -246,7 +247,7 @@ export default function ImageManager({ password }) {
                           borderRadius: '6px',
                           border: 'none',
                           background: 'var(--primary)',
-                          color: '#fff',
+                          color: 'var(--on-primary)',
                           fontSize: '11px',
                           fontWeight: 500,
                         }}
@@ -316,8 +317,8 @@ export default function ImageManager({ password }) {
                     style={{
                       padding: '4px 8px',
                       borderRadius: '4px',
-                      border: '1px solid #FECACA',
-                      background: '#FEF2F2',
+                      border: '1px solid var(--danger-soft-border)',
+                      background: 'var(--danger-soft-bg)',
                       color: 'var(--error)',
                       fontSize: '11px',
                     }}
@@ -341,7 +342,7 @@ export default function ImageManager({ password }) {
             left: 0,
             right: 0,
             bottom: 0,
-            background: 'rgba(0,0,0,0.7)',
+            background: 'var(--overlay)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',

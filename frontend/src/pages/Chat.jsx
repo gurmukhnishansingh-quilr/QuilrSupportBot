@@ -218,7 +218,7 @@ export default function Chat() {
             borderRadius: '12px',
             border: 'none',
             background: 'var(--primary)',
-            color: '#fff',
+            color: 'var(--on-primary)',
             fontSize: '14px',
             fontWeight: 500,
             opacity: loading || !input.trim() ? 0.5 : 1,

@@ -54,7 +54,7 @@ function NativeVideoPlayer({ src, title }) {
           width: '100%',
           maxHeight: '360px',
           borderRadius: '8px',
-          background: '#000',
+          background: 'var(--video-bg)',
         }}
       >
         <source src={src} />
@@ -78,7 +78,7 @@ function IframeVideoPlayer({ embedUrl, title, href }) {
         height: 0,
         borderRadius: '8px',
         overflow: 'hidden',
-        background: '#000',
+        background: 'var(--video-bg)',
       }}>
         <iframe
           src={embedUrl}
@@ -118,7 +118,7 @@ function ChatImage({ src, alt }) {
           borderRadius: '8px',
           overflow: 'hidden',
           border: '1px solid var(--border)',
-          background: '#f8f8f8',
+          background: 'var(--media-bg)',
           cursor: 'pointer',
         }}
         onClick={() => setExpanded(true)}
@@ -156,7 +156,7 @@ function ChatImage({ src, alt }) {
             left: 0,
             right: 0,
             bottom: 0,
-            background: 'rgba(0,0,0,0.75)',
+            background: 'var(--overlay)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -252,7 +252,7 @@ export default function ChatMessage({ message }) {
         padding: '12px 16px',
         borderRadius: isUser ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
         background: isUser ? 'var(--user-bubble)' : 'var(--assistant-bubble)',
-        color: isUser ? '#fff' : 'var(--text)',
+        color: isUser ? 'var(--on-primary)' : 'var(--text)',
         fontSize: '14px',
         lineHeight: '1.5',
         wordBreak: 'break-word',

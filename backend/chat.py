@@ -50,17 +50,30 @@ def build_context(chunks: list[dict]) -> tuple[str, list[dict]]:
     seen_filenames = set()
 
     for chunk in chunks:
-        filename = chunk["metadata"]["filename"]
-        header = f"[From: {filename}]"
-        link = doc_links.get(filename)
-        if link:
-            header += f" (Full document: {link})"
+        metadata = chunk.get("metadata") or {}
+        source_type = metadata.get("source_type")
+
+        if source_type == "video_transcript":
+            title = metadata.get("video_title") or "Video transcript"
+            video_url = metadata.get("video_url") or ""
+            filename = f"Video transcript: {title}"
+            header = f"[From: {filename}]"
+            if video_url:
+                header += f" (Video: {video_url})"
+        else:
+            filename = metadata.get("filename") or "Unknown document"
+            header = f"[From: {filename}]"
+            link = doc_links.get(filename)
+            if link:
+                header += f" (Full document: {link})"
+
         context_parts.append(f"{header}\n{chunk['text']}")
         if filename not in seen_filenames:
             seen_filenames.add(filename)
             sources.append({
                 "filename": filename,
                 "chunk_id": chunk["id"],
+                "source_type": source_type or "document",
                 "relevance": 1 - (chunk["distance"] or 0)
             })
 
@@ -93,7 +106,9 @@ async def chat_stream(question: str):
         return
 
     # Retrieve relevant chunks
-    chunks = search_similar(question, n_results=5)
+    include_video_transcripts = bool(config.get("include_video_transcripts_in_rag"))
+    chunks = search_similar(question, n_results=5,
+                            include_video_transcripts=include_video_transcripts)
     context, sources = build_context(chunks)
 
     # Send sources first

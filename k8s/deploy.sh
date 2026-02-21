@@ -11,6 +11,7 @@ FORCE_SEED_DOCS="${FORCE_SEED_DOCS:-false}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
 BUILD_NO_CACHE="${BUILD_NO_CACHE:-false}"
 SKIP_ADDONS="${SKIP_ADDONS:-false}"
+FORCE_ROLLOUT_RESTART="${FORCE_ROLLOUT_RESTART:-true}"
 
 ensure_addon() {
   local addon="$1"
@@ -84,6 +85,11 @@ fi
 
 microk8s kubectl apply -f "$SCRIPT_DIR/deployment.yaml"
 microk8s kubectl apply -f "$SCRIPT_DIR/service.yaml"
+
+if [ "$FORCE_ROLLOUT_RESTART" = "true" ]; then
+  echo ">>> Restarting deployment pods to pick up latest image..."
+  microk8s kubectl rollout restart "deployment/$APP_DEPLOYMENT" -n "$NAMESPACE"
+fi
 
 # 5. Wait for the deployment to be ready
 echo ""

@@ -15,16 +15,18 @@ load_dotenv()
 from config import (
     init_db, get_llm_config, update_llm_config,
     list_documents, delete_document, get_document, update_document_link,
-    list_video_links, add_video_link, delete_video_link,
+    list_video_links, add_video_link, delete_video_link, update_video_link_transcript,
     list_images, add_image, update_image_description, delete_image,
+    verify_admin_password, create_admin_session, validate_admin_session,
+    delete_admin_session, delete_all_admin_sessions, change_admin_password,
 )
 from embeddings import (
     auto_index_documents, index_pdf, remove_document_embeddings,
-    reindex_all_documents, DOCUMENTS_DIR
+    reindex_all_documents, DOCUMENTS_DIR, auto_index_video_transcripts,
+    index_video_transcript, remove_video_transcript_embeddings
 )
 from chat import chat_stream, test_llm_connection
 
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 VIDEOS_DIR = os.path.join(os.path.dirname(__file__), "..", "videos")
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".ogg", ".mov"}
 TRANSCRIPT_EXTENSIONS = {".txt", ".srt", ".vtt", ".md"}
@@ -42,6 +44,8 @@ async def lifespan(app: FastAPI):
     print("Auto-indexing documents...")
     count = auto_index_documents()
     print(f"Auto-indexed {count} new document(s)")
+    transcript_count = auto_index_video_transcripts()
+    print(f"Auto-indexed transcripts for {transcript_count} video(s)")
     yield
     # Shutdown (nothing needed)
 
@@ -60,9 +64,17 @@ app.add_middleware(
 # --- Auth ---
 
 def verify_admin(request: Request):
+    session_token = request.headers.get("X-Admin-Session", "").strip()
+    if session_token and validate_admin_session(session_token):
+        request.state.admin_session_token = session_token
+        return
+
+    # Backward-compatible fallback for clients still sending plain password.
     password = request.headers.get("X-Admin-Password", "")
-    if password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Invalid admin password")
+    if password and verify_admin_password(password):
+        return
+
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 # --- Pydantic Models ---
@@ -73,12 +85,22 @@ class LLMConfigUpdate(BaseModel):
     api_key: str
     model_name: str
     api_version: str = ""
+    include_video_transcripts_in_rag: bool = False
     temperature: float = 0.7
     max_tokens: int = 1024
 
 
 class ChatRequest(BaseModel):
     question: str
+
+
+class AdminLoginRequest(BaseModel):
+    password: str
+
+
+class AdminPasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
 class VideoLinkCreate(BaseModel):
@@ -155,6 +177,14 @@ async def _read_transcript_upload(transcript_file: UploadFile) -> str:
     return _normalize_transcript_text(cleaned)
 
 
+def _sync_video_transcript_index(video_link: dict):
+    """Best-effort transcript indexing; should not fail main admin actions."""
+    try:
+        index_video_transcript(video_link)
+    except Exception as e:
+        print(f"Warning: failed transcript indexing for video {video_link.get('id')}: {e}")
+
+
 # --- Chat Routes ---
 
 @app.post("/api/chat")
@@ -171,6 +201,39 @@ async def chat(request: ChatRequest):
 
 
 # --- Admin Config Routes ---
+
+@app.post("/api/admin/auth/login")
+async def admin_login(body: AdminLoginRequest):
+    if not verify_admin_password(body.password):
+        raise HTTPException(status_code=401, detail="Invalid password")
+    return create_admin_session()
+
+
+@app.get("/api/admin/auth/session")
+async def admin_session_check(request: Request, _=Depends(verify_admin)):
+    return {"authenticated": True}
+
+
+@app.post("/api/admin/auth/logout")
+async def admin_logout(request: Request, _=Depends(verify_admin)):
+    session_token = request.headers.get("X-Admin-Session", "").strip()
+    if session_token:
+        delete_admin_session(session_token)
+    return {"status": "logged_out"}
+
+
+@app.put("/api/admin/auth/password")
+async def admin_change_password(body: AdminPasswordChangeRequest, request: Request,
+                                _=Depends(verify_admin)):
+    if not verify_admin_password(body.current_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if len((body.new_password or "").strip()) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+
+    change_admin_password(body.new_password.strip())
+    delete_all_admin_sessions()
+    return create_admin_session()
+
 
 @app.get("/api/admin/config")
 async def get_config(request: Request, _=Depends(verify_admin)):
@@ -190,15 +253,21 @@ async def get_config(request: Request, _=Depends(verify_admin)):
 @app.put("/api/admin/config")
 async def put_config(config: LLMConfigUpdate, request: Request,
                      _=Depends(verify_admin)):
+    previous = get_llm_config()
     updated = update_llm_config(
         provider_type=config.provider_type,
         provider_url=config.provider_url,
         api_key=config.api_key,
         model_name=config.model_name,
         api_version=config.api_version,
+        include_video_transcripts_in_rag=config.include_video_transcripts_in_rag,
         temperature=config.temperature,
         max_tokens=config.max_tokens,
     )
+    was_enabled = bool(previous.get("include_video_transcripts_in_rag"))
+    now_enabled = bool(updated.get("include_video_transcripts_in_rag"))
+    if not was_enabled and now_enabled:
+        auto_index_video_transcripts()
     return updated
 
 
@@ -301,9 +370,11 @@ async def get_video_links(request: Request, _=Depends(verify_admin)):
 @app.post("/api/admin/video-links")
 async def create_video_link(link: VideoLinkCreate, request: Request,
                             _=Depends(verify_admin)):
-    return add_video_link(title=link.title, url=link.url,
-                          description=link.description,
-                          transcript=_normalize_transcript_text(link.transcript))
+    entry = add_video_link(title=link.title, url=link.url,
+                           description=link.description,
+                           transcript=_normalize_transcript_text(link.transcript))
+    _sync_video_transcript_index(entry)
+    return entry
 
 
 @app.post("/api/admin/video-links/upload")
@@ -334,6 +405,7 @@ async def upload_video(request: Request, file: UploadFile = File(...),
     video_url = f"/api/videos/{file.filename}"
     entry = add_video_link(title=title, url=video_url, description="Uploaded video",
                            transcript=transcript)
+    _sync_video_transcript_index(entry)
     return entry
 
 
@@ -348,10 +420,32 @@ async def remove_video_link(link_id: int, request: Request,
         filepath = os.path.join(VIDEOS_DIR, filename)
         if os.path.exists(filepath):
             os.remove(filepath)
+    if link:
+        remove_video_transcript_embeddings(link_id)
 
     if not delete_video_link(link_id):
         raise HTTPException(status_code=404, detail="Video link not found")
     return {"status": "deleted"}
+
+
+@app.put("/api/admin/video-links/{link_id}/transcript")
+async def update_video_transcript(link_id: int, request: Request,
+                                  transcript_file: UploadFile | None = File(None),
+                                  transcript_text: str = Form(""),
+                                  _=Depends(verify_admin)):
+    if transcript_file and transcript_text.strip():
+        raise HTTPException(status_code=400,
+                            detail="Provide either transcript file or transcript text, not both.")
+
+    transcript = _normalize_transcript_text(transcript_text)
+    if transcript_file:
+        transcript = await _read_transcript_upload(transcript_file)
+
+    updated = update_video_link_transcript(link_id, transcript)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Video link not found")
+    _sync_video_transcript_index(updated)
+    return updated
 
 
 # --- Serve Uploaded Videos (public, no auth) ---

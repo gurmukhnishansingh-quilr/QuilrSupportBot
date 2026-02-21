@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 
-export default function LLMConfig({ password }) {
+export default function LLMConfig({ authHeaders }) {
   const [config, setConfig] = useState({
     provider_type: 'openai',
     provider_url: '',
     api_key: '',
     model_name: '',
     api_version: '',
+    include_video_transcripts_in_rag: false,
     temperature: 0.7,
     max_tokens: 1024,
   })
@@ -17,7 +18,7 @@ export default function LLMConfig({ password }) {
   const [testResult, setTestResult] = useState(null)
   const [message, setMessage] = useState(null)
 
-  const headers = { 'X-Admin-Password': password }
+  const headers = authHeaders || {}
 
   useEffect(() => {
     loadConfig()
@@ -32,6 +33,7 @@ export default function LLMConfig({ password }) {
         api_key: '',
         model_name: res.data.model_name || '',
         api_version: res.data.api_version || '',
+        include_video_transcripts_in_rag: !!res.data.include_video_transcripts_in_rag,
         temperature: res.data.temperature ?? 0.7,
         max_tokens: res.data.max_tokens ?? 1024,
       })
@@ -87,6 +89,7 @@ export default function LLMConfig({ password }) {
     fontSize: '14px',
     outline: 'none',
     background: 'var(--bg)',
+    color: 'var(--text)',
   }
 
   const labelStyle = {
@@ -127,7 +130,7 @@ export default function LLMConfig({ password }) {
                     borderRadius: '8px',
                     border: `1px solid ${config.provider_type === opt.value ? 'var(--primary)' : 'var(--border)'}`,
                     background: config.provider_type === opt.value ? 'var(--primary)' : 'var(--surface)',
-                    color: config.provider_type === opt.value ? '#fff' : 'var(--text)',
+                    color: config.provider_type === opt.value ? 'var(--on-primary)' : 'var(--text)',
                     fontSize: '13px',
                     fontWeight: 500,
                     cursor: 'pointer',
@@ -195,6 +198,32 @@ export default function LLMConfig({ password }) {
             </div>
           )}
 
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '10px 12px',
+            borderRadius: '8px',
+            border: '1px solid var(--border)',
+            background: 'var(--bg)',
+          }}>
+            <input
+              id="include-video-transcripts-in-rag"
+              type="checkbox"
+              checked={!!config.include_video_transcripts_in_rag}
+              onChange={e => setConfig({
+                ...config,
+                include_video_transcripts_in_rag: e.target.checked,
+              })}
+            />
+            <label
+              htmlFor="include-video-transcripts-in-rag"
+              style={{ fontSize: '13px', color: 'var(--text)' }}
+            >
+              Include video transcripts in RAG search
+            </label>
+          </div>
+
           <div style={{ display: 'flex', gap: '16px' }}>
             <div style={{ flex: 1 }}>
               <label style={labelStyle}>Temperature: {config.temperature}</label>
@@ -225,7 +254,8 @@ export default function LLMConfig({ password }) {
             padding: '8px 12px',
             borderRadius: '8px',
             fontSize: '13px',
-            background: message.type === 'error' ? '#FEF2F2' : '#F0FDF4',
+            background: message.type === 'error' ? 'var(--status-error-bg)' : 'var(--status-success-bg)',
+            border: `1px solid ${message.type === 'error' ? 'var(--status-error-border)' : 'var(--status-success-border)'}`,
             color: message.type === 'error' ? 'var(--error)' : 'var(--success)',
           }}>
             {message.text}
@@ -241,7 +271,7 @@ export default function LLMConfig({ password }) {
               borderRadius: '8px',
               border: 'none',
               background: 'var(--primary)',
-              color: '#fff',
+              color: 'var(--on-primary)',
               fontSize: '14px',
               fontWeight: 500,
               opacity: saving ? 0.6 : 1,
@@ -275,8 +305,8 @@ export default function LLMConfig({ password }) {
           padding: '12px',
           borderRadius: '8px',
           fontSize: '13px',
-          background: testResult.success ? '#F0FDF4' : '#FEF2F2',
-          border: `1px solid ${testResult.success ? '#BBF7D0' : '#FECACA'}`,
+          background: testResult.success ? 'var(--status-success-bg)' : 'var(--status-error-bg)',
+          border: `1px solid ${testResult.success ? 'var(--status-success-border)' : 'var(--status-error-border)'}`,
         }}>
           {testResult.success ? (
             <div>

@@ -1,18 +1,22 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 
-export default function VideoLinks({ password }) {
+export default function VideoLinks({ authHeaders }) {
   const [links, setLinks] = useState([])
   const [form, setForm] = useState({ title: '', url: '', description: '', transcript: '' })
   const [adding, setAdding] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [updatingTranscriptId, setUpdatingTranscriptId] = useState(null)
   const [uploadVideoFile, setUploadVideoFile] = useState(null)
   const [uploadTranscriptFile, setUploadTranscriptFile] = useState(null)
+  const [transcriptDrafts, setTranscriptDrafts] = useState({})
+  const [transcriptFiles, setTranscriptFiles] = useState({})
   const [message, setMessage] = useState(null)
   const videoInputRef = useRef(null)
   const transcriptInputRef = useRef(null)
+  const transcriptUpdateInputRefs = useRef({})
 
-  const headers = { 'X-Admin-Password': password }
+  const headers = authHeaders || {}
 
   useEffect(() => {
     loadLinks()
@@ -22,6 +26,21 @@ export default function VideoLinks({ password }) {
     try {
       const res = await axios.get('/api/admin/video-links', { headers })
       setLinks(res.data)
+      setTranscriptDrafts(prev => {
+        const next = {}
+        for (const link of res.data) {
+          const hasDraft = Object.prototype.hasOwnProperty.call(prev, link.id)
+          next[link.id] = hasDraft ? prev[link.id] : (link.transcript || '')
+        }
+        return next
+      })
+      setTranscriptFiles(prev => {
+        const next = {}
+        for (const link of res.data) {
+          if (prev[link.id]) next[link.id] = prev[link.id]
+        }
+        return next
+      })
     } catch {
       setMessage({ type: 'error', text: 'Failed to load video links' })
     }
@@ -82,6 +101,45 @@ export default function VideoLinks({ password }) {
     }
   }
 
+  const updateTranscript = async (link) => {
+    const transcriptFile = transcriptFiles[link.id]
+    const transcriptText = transcriptDrafts[link.id] || ''
+    setUpdatingTranscriptId(link.id)
+    setMessage(null)
+
+    const formData = new FormData()
+    if (transcriptFile) {
+      formData.append('transcript_file', transcriptFile)
+    } else {
+      formData.append('transcript_text', transcriptText)
+    }
+
+    try {
+      const res = await axios.put(`/api/admin/video-links/${link.id}/transcript`, formData, {
+        headers: { ...headers, 'Content-Type': 'multipart/form-data' },
+      })
+      const savedTranscript = res.data.transcript || ''
+      setTranscriptDrafts(prev => ({ ...prev, [link.id]: savedTranscript }))
+      setTranscriptFiles(prev => {
+        const next = { ...prev }
+        delete next[link.id]
+        return next
+      })
+      const input = transcriptUpdateInputRefs.current[link.id]
+      if (input) input.value = ''
+      setMessage({
+        type: 'success',
+        text: savedTranscript ? `Updated transcript for "${link.title}"` : `Removed transcript from "${link.title}"`,
+      })
+      loadLinks()
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Failed to update transcript'
+      setMessage({ type: 'error', text: detail })
+    } finally {
+      setUpdatingTranscriptId(null)
+    }
+  }
+
   const inputStyle = {
     width: '100%',
     padding: '10px 12px',
@@ -90,6 +148,7 @@ export default function VideoLinks({ password }) {
     fontSize: '14px',
     outline: 'none',
     background: 'var(--bg)',
+    color: 'var(--text)',
   }
 
   const labelStyle = {
@@ -164,7 +223,7 @@ export default function VideoLinks({ password }) {
               borderRadius: '8px',
               border: 'none',
               background: 'var(--primary)',
-              color: '#fff',
+              color: 'var(--on-primary)',
               fontSize: '12px',
               opacity: uploading || !uploadVideoFile ? 0.6 : 1,
             }}
@@ -244,6 +303,84 @@ export default function VideoLinks({ password }) {
                     Transcript attached
                   </div>
                 )}
+                <div style={{ marginTop: '8px' }}>
+                  <textarea
+                    style={{ ...inputStyle, minHeight: '72px', resize: 'vertical', fontSize: '12px' }}
+                    value={transcriptDrafts[link.id] || ''}
+                    onChange={e => setTranscriptDrafts(prev => ({ ...prev, [link.id]: e.target.value }))}
+                    placeholder="Paste transcript text for this video (optional)"
+                  />
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
+                    <button
+                      onClick={() => transcriptUpdateInputRefs.current[link.id]?.click()}
+                      disabled={updatingTranscriptId === link.id}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--text)',
+                        fontSize: '12px',
+                      }}
+                    >
+                      {transcriptFiles[link.id] ? 'Change Transcript File' : 'Upload Transcript File'}
+                    </button>
+                    <button
+                      onClick={() => updateTranscript(link)}
+                      disabled={
+                        updatingTranscriptId === link.id ||
+                        (!transcriptFiles[link.id] &&
+                          (transcriptDrafts[link.id] || '').trim() === (link.transcript || '').trim())
+                      }
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: 'var(--primary)',
+                        color: 'var(--on-primary)',
+                        fontSize: '12px',
+                        opacity:
+                          updatingTranscriptId === link.id ||
+                          (!transcriptFiles[link.id] &&
+                            (transcriptDrafts[link.id] || '').trim() === (link.transcript || '').trim())
+                            ? 0.6 : 1,
+                      }}
+                    >
+                      {updatingTranscriptId === link.id ? 'Saving...' : 'Save Transcript'}
+                    </button>
+                    <button
+                      onClick={() => setTranscriptDrafts(prev => ({ ...prev, [link.id]: '' }))}
+                      disabled={updatingTranscriptId === link.id}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--text-secondary)',
+                        fontSize: '12px',
+                      }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <input
+                    ref={el => {
+                      transcriptUpdateInputRefs.current[link.id] = el
+                    }}
+                    type="file"
+                    accept=".txt,.srt,.vtt,.md"
+                    onChange={e => {
+                      const file = e.target.files?.[0] || null
+                      setTranscriptFiles(prev => ({ ...prev, [link.id]: file }))
+                    }}
+                    style={{ display: 'none' }}
+                  />
+                  {transcriptFiles[link.id] && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Selected file: {transcriptFiles[link.id].name}
+                    </div>
+                  )}
+                </div>
               </div>
               <button
                 onClick={() => removeLink(link.id)}
@@ -314,7 +451,8 @@ export default function VideoLinks({ password }) {
             padding: '8px 12px',
             borderRadius: '8px',
             fontSize: '13px',
-            background: message.type === 'error' ? '#FEF2F2' : '#F0FDF4',
+            background: message.type === 'error' ? 'var(--status-error-bg)' : 'var(--status-success-bg)',
+            border: `1px solid ${message.type === 'error' ? 'var(--status-error-border)' : 'var(--status-success-border)'}`,
             color: message.type === 'error' ? 'var(--error)' : 'var(--success)',
           }}>
             {message.text}
@@ -330,7 +468,7 @@ export default function VideoLinks({ password }) {
             borderRadius: '8px',
             border: 'none',
             background: 'var(--primary)',
-            color: '#fff',
+            color: 'var(--on-primary)',
             fontSize: '14px',
             fontWeight: 500,
             opacity: adding || !form.title.trim() || !form.url.trim() ? 0.6 : 1,

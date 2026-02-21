@@ -6,7 +6,7 @@ import chromadb
 from sentence_transformers import SentenceTransformer
 from config import (
     add_document, get_document_by_filename, update_document_status,
-    list_documents, get_document
+    list_documents, get_document, list_video_links
 )
 
 DOCUMENTS_DIR = os.path.join(os.path.dirname(__file__), "..", "documents")
@@ -123,6 +123,60 @@ def remove_document_embeddings(doc_id: int, filename: str):
         collection.delete(ids=results["ids"])
 
 
+def remove_video_transcript_embeddings(video_id: int):
+    """Remove all transcript embeddings for a video link from ChromaDB."""
+    collection = get_collection()
+    results = collection.get(where={"source_type": "video_transcript", "video_id": video_id})
+    if results["ids"]:
+        collection.delete(ids=results["ids"])
+
+
+def index_video_transcript(video_link: dict) -> int:
+    """Index transcript text for a video link and return chunk count."""
+    video_id = int(video_link["id"])
+    title = (video_link.get("title") or f"Video {video_id}").strip()
+    url = (video_link.get("url") or "").strip()
+    transcript = (video_link.get("transcript") or "").strip()
+
+    # Keep index in sync when transcript is cleared/changed.
+    remove_video_transcript_embeddings(video_id)
+
+    if not transcript:
+        return 0
+
+    chunks = chunk_text(transcript)
+    if not chunks:
+        return 0
+
+    model = get_model()
+    embeddings = model.encode(chunks).tolist()
+    collection = get_collection()
+
+    ids = [f"video_{video_id}__transcript_chunk_{i}" for i in range(len(chunks))]
+    metadatas = [
+        {
+            "source_type": "video_transcript",
+            "video_id": video_id,
+            "video_title": title,
+            "video_url": url,
+            "filename": f"Video transcript: {title}",
+            "chunk_index": i,
+        }
+        for i in range(len(chunks))
+    ]
+
+    batch_size = 100
+    for start in range(0, len(chunks), batch_size):
+        end = start + batch_size
+        collection.upsert(
+            ids=ids[start:end],
+            embeddings=embeddings[start:end],
+            documents=chunks[start:end],
+            metadatas=metadatas[start:end]
+        )
+    return len(chunks)
+
+
 def auto_index_documents():
     """Index any PDFs in the documents directory that haven't been processed."""
     os.makedirs(DOCUMENTS_DIR, exist_ok=True)
@@ -144,6 +198,22 @@ def auto_index_documents():
             print(f"Error indexing {pdf_file}: {e}")
 
     return indexed_count
+
+
+def auto_index_video_transcripts() -> int:
+    """Index transcripts for all videos that have transcript content."""
+    indexed = 0
+    for video in list_video_links():
+        transcript = (video.get("transcript") or "").strip()
+        if not transcript:
+            continue
+        try:
+            chunks = index_video_transcript(video)
+            print(f"Indexed transcript for video {video['id']}: {chunks} chunks")
+            indexed += 1
+        except Exception as e:
+            print(f"Error indexing transcript for video {video.get('id')}: {e}")
+    return indexed
 
 
 def reindex_all_documents():
@@ -177,7 +247,8 @@ def reindex_all_documents():
     return results
 
 
-def search_similar(query: str, n_results: int = 5) -> list[dict]:
+def search_similar(query: str, n_results: int = 5,
+                   include_video_transcripts: bool = False) -> list[dict]:
     """Search for chunks similar to the query."""
     model = get_model()
     query_embedding = model.encode([query]).tolist()
@@ -186,18 +257,25 @@ def search_similar(query: str, n_results: int = 5) -> list[dict]:
     if collection.count() == 0:
         return []
 
+    fetch_count = min(max(n_results * 6, 20), collection.count())
     results = collection.query(
         query_embeddings=query_embedding,
-        n_results=min(n_results, collection.count())
+        n_results=fetch_count
     )
 
     chunks = []
     for i in range(len(results["ids"][0])):
+        metadata = results["metadatas"][0][i]
+        source_type = metadata.get("source_type")
+        if source_type == "video_transcript" and not include_video_transcripts:
+            continue
         chunks.append({
             "id": results["ids"][0][i],
             "text": results["documents"][0][i],
-            "metadata": results["metadatas"][0][i],
+            "metadata": metadata,
             "distance": results["distances"][0][i] if results.get("distances") else None
         })
+        if len(chunks) >= n_results:
+            break
 
     return chunks
