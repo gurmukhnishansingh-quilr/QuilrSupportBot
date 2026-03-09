@@ -6,12 +6,16 @@ import hashlib
 import hmac
 import secrets
 import base64
+import json
+import re
 from datetime import datetime, timedelta, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "config.db")
 PASSWORD_HASH_PREFIX = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 200_000
 ADMIN_SESSION_HOURS = 72
+ACCESS_ENTITY_TYPES = {"document", "video", "image"}
+EMAIL_PATTERN = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 
 def _utc_now() -> datetime:
@@ -133,6 +137,46 @@ def init_db():
             expires_at TEXT NOT NULL
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admin_oauth_access_emails (
+            email TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS content_access (
+            entity_type TEXT NOT NULL,
+            entity_id INTEGER NOT NULL,
+            email TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (entity_type, entity_id, email)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            actor_type TEXT NOT NULL DEFAULT '',
+            actor_email TEXT NOT NULL DEFAULT '',
+            actor_first_name TEXT NOT NULL DEFAULT '',
+            actor_last_name TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'success',
+            target_type TEXT NOT NULL DEFAULT '',
+            target_id TEXT NOT NULL DEFAULT '',
+            message TEXT NOT NULL DEFAULT '',
+            metadata TEXT NOT NULL DEFAULT '',
+            ip_address TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+    """)
+    audit_cols = {r[1] for r in cursor.execute("PRAGMA table_info(audit_logs)").fetchall()}
+    if audit_cols and "actor_first_name" not in audit_cols:
+        cursor.execute("ALTER TABLE audit_logs ADD COLUMN actor_first_name TEXT NOT NULL DEFAULT ''")
+    if audit_cols and "actor_last_name" not in audit_cols:
+        cursor.execute("ALTER TABLE audit_logs ADD COLUMN actor_last_name TEXT NOT NULL DEFAULT ''")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_event_type ON audit_logs(event_type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_email ON audit_logs(actor_email)")
     # Migrate images table: add description column if missing
     img_cols = {r[1] for r in cursor.execute("PRAGMA table_info(images)").fetchall()}
     if img_cols and "description" not in img_cols:
@@ -237,6 +281,409 @@ def change_admin_password(new_password: str):
     conn.close()
 
 
+def _normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def _normalize_person_name(value: str) -> str:
+    return " ".join((value or "").strip().split())
+
+
+def _normalize_entity_type(entity_type: str) -> str:
+    normalized = (entity_type or "").strip().lower()
+    if normalized not in ACCESS_ENTITY_TYPES:
+        raise ValueError(f"Unsupported entity type: {entity_type}")
+    return normalized
+
+
+def normalize_content_access_emails(emails: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    seen = set()
+    for raw in emails or []:
+        email = _normalize_email(raw)
+        if not email:
+            continue
+        if not EMAIL_PATTERN.fullmatch(email):
+            raise ValueError(f"Invalid email format: {raw}")
+        if email in seen:
+            continue
+        seen.add(email)
+        normalized.append(email)
+    return normalized
+
+
+def list_admin_oauth_access_emails() -> list[dict]:
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT email, created_at FROM admin_oauth_access_emails ORDER BY email"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def add_admin_oauth_access_email(email: str) -> dict:
+    normalized = _normalize_email(email)
+    if not normalized:
+        raise ValueError("Email is required")
+    conn = get_db()
+    now = _utc_now().isoformat()
+    conn.execute(
+        "INSERT OR IGNORE INTO admin_oauth_access_emails (email, created_at) VALUES (?, ?)",
+        (normalized, now),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT email, created_at FROM admin_oauth_access_emails WHERE email = ?",
+        (normalized,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else {"email": normalized, "created_at": now}
+
+
+def delete_admin_oauth_access_email(email: str) -> bool:
+    normalized = _normalize_email(email)
+    if not normalized:
+        return False
+    conn = get_db()
+    cursor = conn.execute(
+        "DELETE FROM admin_oauth_access_emails WHERE email = ?",
+        (normalized,),
+    )
+    conn.commit()
+    conn.close()
+    return cursor.rowcount > 0
+
+
+def is_admin_oauth_email_allowed(email: str) -> bool:
+    normalized = _normalize_email(email)
+    if not normalized:
+        return False
+    conn = get_db()
+    row = conn.execute(
+        "SELECT email FROM admin_oauth_access_emails WHERE email = ?",
+        (normalized,),
+    ).fetchone()
+    conn.close()
+    return bool(row)
+
+
+def list_content_access_emails(entity_type: str, entity_id: int) -> list[str]:
+    normalized_type = _normalize_entity_type(entity_type)
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT email FROM content_access
+        WHERE entity_type = ? AND entity_id = ?
+        ORDER BY email
+        """,
+        (normalized_type, int(entity_id)),
+    ).fetchall()
+    conn.close()
+    return [r["email"] for r in rows]
+
+
+def get_content_access_map(entity_type: str, entity_ids: list[int] | None = None) -> dict[int, list[str]]:
+    normalized_type = _normalize_entity_type(entity_type)
+    ids = sorted({int(i) for i in (entity_ids or []) if int(i) > 0})
+    conn = get_db()
+    if ids:
+        placeholders = ",".join(["?"] * len(ids))
+        rows = conn.execute(
+            f"""
+            SELECT entity_id, email
+            FROM content_access
+            WHERE entity_type = ? AND entity_id IN ({placeholders})
+            ORDER BY entity_id, email
+            """,
+            [normalized_type, *ids],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT entity_id, email
+            FROM content_access
+            WHERE entity_type = ?
+            ORDER BY entity_id, email
+            """,
+            (normalized_type,),
+        ).fetchall()
+    conn.close()
+
+    access_map: dict[int, list[str]] = {}
+    for row in rows:
+        entity_id = int(row["entity_id"])
+        access_map.setdefault(entity_id, []).append(row["email"])
+    return access_map
+
+
+def set_content_access_emails(entity_type: str, entity_id: int, emails: list[str] | None) -> list[str]:
+    normalized_type = _normalize_entity_type(entity_type)
+    normalized_emails = normalize_content_access_emails(emails)
+    entity_id_int = int(entity_id)
+    if entity_id_int <= 0:
+        raise ValueError("entity_id must be a positive integer")
+
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM content_access WHERE entity_type = ? AND entity_id = ?",
+        (normalized_type, entity_id_int),
+    )
+    now = _utc_now().isoformat()
+    for email in normalized_emails:
+        conn.execute(
+            """
+            INSERT INTO content_access (entity_type, entity_id, email, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (normalized_type, entity_id_int, email, now),
+        )
+    conn.commit()
+    conn.close()
+    return normalized_emails
+
+
+def delete_content_access(entity_type: str, entity_id: int):
+    normalized_type = _normalize_entity_type(entity_type)
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM content_access WHERE entity_type = ? AND entity_id = ?",
+        (normalized_type, int(entity_id)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def is_entity_visible_to_email(entity_type: str, entity_id: int, email: str) -> bool:
+    normalized_type = _normalize_entity_type(entity_type)
+    entity_id_int = int(entity_id)
+    normalized_email = _normalize_email(email)
+
+    conn = get_db()
+    total = conn.execute(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM content_access
+        WHERE entity_type = ? AND entity_id = ?
+        """,
+        (normalized_type, entity_id_int),
+    ).fetchone()["cnt"]
+    if total == 0:
+        conn.close()
+        return True
+    if not normalized_email:
+        conn.close()
+        return False
+    row = conn.execute(
+        """
+        SELECT email FROM content_access
+        WHERE entity_type = ? AND entity_id = ? AND email = ?
+        """,
+        (normalized_type, entity_id_int, normalized_email),
+    ).fetchone()
+    conn.close()
+    return bool(row)
+
+
+def filter_items_by_access_email(entity_type: str, items: list[dict], email: str) -> list[dict]:
+    normalized_type = _normalize_entity_type(entity_type)
+    normalized_email = _normalize_email(email)
+    ids = []
+    for item in items:
+        try:
+            item_id = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if item_id > 0:
+            ids.append(item_id)
+
+    access_map = get_content_access_map(normalized_type, ids)
+    filtered = []
+    for item in items:
+        try:
+            item_id = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        allowed = access_map.get(item_id, [])
+        if not allowed:
+            filtered.append(item)
+            continue
+        if normalized_email and normalized_email in allowed:
+            filtered.append(item)
+    return filtered
+
+
+def add_audit_log(event_type: str, actor_type: str = "", actor_email: str = "",
+                  actor_first_name: str = "", actor_last_name: str = "",
+                  status: str = "success", target_type: str = "",
+                  target_id: str = "", message: str = "",
+                  metadata: dict | list | str | None = None,
+                  ip_address: str = "") -> dict:
+    event = (event_type or "").strip()
+    if not event:
+        raise ValueError("event_type is required")
+
+    actor_type_norm = (actor_type or "").strip()
+    actor_email_norm = _normalize_email(actor_email)
+    actor_first_name_norm = _normalize_person_name(actor_first_name)
+    actor_last_name_norm = _normalize_person_name(actor_last_name)
+    status_norm = (status or "success").strip().lower() or "success"
+    target_type_norm = (target_type or "").strip().lower()
+    target_id_norm = str(target_id or "").strip()
+    message_norm = (message or "").strip()
+    ip_norm = (ip_address or "").strip()
+    now = _utc_now().isoformat()
+
+    if isinstance(metadata, (dict, list)):
+        metadata_text = json.dumps(metadata, ensure_ascii=True)
+    elif metadata is None:
+        metadata_text = ""
+    else:
+        metadata_text = str(metadata).strip()
+
+    conn = get_db()
+    cursor = conn.execute(
+        """
+        INSERT INTO audit_logs (
+            event_type, actor_type, actor_email, actor_first_name, actor_last_name, status,
+            target_type, target_id, message, metadata, ip_address, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event,
+            actor_type_norm,
+            actor_email_norm,
+            actor_first_name_norm,
+            actor_last_name_norm,
+            status_norm,
+            target_type_norm,
+            target_id_norm,
+            message_norm,
+            metadata_text,
+            ip_norm,
+            now,
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM audit_logs WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    conn.close()
+    return dict(row) if row else {}
+
+
+def list_audit_logs(limit: int = 200, offset: int = 0, event_type: str = "",
+                    actor_email: str = "", status: str = "") -> list[dict]:
+    limit_clamped = min(max(int(limit or 50), 1), 1000)
+    offset_clamped = max(int(offset or 0), 0)
+    filters = []
+    params: list[str | int] = []
+
+    event = (event_type or "").strip()
+    if event:
+        filters.append("event_type = ?")
+        params.append(event)
+
+    actor = _normalize_email(actor_email)
+    if actor:
+        filters.append("actor_email = ?")
+        params.append(actor)
+
+    status_norm = (status or "").strip().lower()
+    if status_norm:
+        filters.append("status = ?")
+        params.append(status_norm)
+
+    where = f"WHERE {' AND '.join(filters)}" if filters else ""
+    query = f"""
+        SELECT *
+        FROM audit_logs
+        {where}
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+    """
+    params.extend([limit_clamped, offset_clamped])
+
+    conn = get_db()
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    out = []
+    for row in rows:
+        item = dict(row)
+        meta_text = (item.get("metadata") or "").strip()
+        if meta_text:
+            try:
+                item["metadata_json"] = json.loads(meta_text)
+            except json.JSONDecodeError:
+                item["metadata_json"] = None
+        else:
+            item["metadata_json"] = None
+        out.append(item)
+    return out
+
+
+def list_user_activity(limit: int = 300, email_query: str = "") -> list[dict]:
+    limit_clamped = min(max(int(limit or 300), 1), 2000)
+    q = _normalize_email(email_query)
+    params: list[str | int] = []
+    where = "WHERE a.actor_email != ''"
+    if q:
+        where += " AND a.actor_email LIKE ?"
+        params.append(f"%{q}%")
+    params.append(limit_clamped)
+
+    conn = get_db()
+    rows = conn.execute(
+        f"""
+        SELECT a.actor_email,
+               COUNT(*) AS event_count,
+               MAX(a.created_at) AS last_seen,
+               GROUP_CONCAT(DISTINCT a.actor_type) AS actor_types,
+               COALESCE(
+                 (
+                   SELECT x.actor_first_name
+                   FROM audit_logs x
+                   WHERE x.actor_email = a.actor_email
+                     AND x.actor_first_name != ''
+                   ORDER BY x.created_at DESC, x.id DESC
+                   LIMIT 1
+                 ),
+                 ''
+               ) AS first_name,
+               COALESCE(
+                 (
+                   SELECT x.actor_last_name
+                   FROM audit_logs x
+                   WHERE x.actor_email = a.actor_email
+                     AND x.actor_last_name != ''
+                   ORDER BY x.created_at DESC, x.id DESC
+                   LIMIT 1
+                 ),
+                 ''
+               ) AS last_name
+        FROM audit_logs a
+        {where}
+        GROUP BY a.actor_email
+        ORDER BY last_seen DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    conn.close()
+
+    out = []
+    for row in rows:
+        actor_types_raw = (row["actor_types"] or "").strip()
+        actor_types = [t for t in actor_types_raw.split(",") if t] if actor_types_raw else []
+        out.append({
+            "email": row["actor_email"],
+            "first_name": row["first_name"] or "",
+            "last_name": row["last_name"] or "",
+            "event_count": int(row["event_count"] or 0),
+            "last_seen": row["last_seen"] or "",
+            "actor_types": actor_types,
+        })
+    return out
+
+
 def get_llm_config() -> dict:
     conn = get_db()
     row = conn.execute("SELECT * FROM llm_config WHERE id = 1").fetchone()
@@ -321,6 +768,10 @@ def list_documents() -> list[dict]:
 
 def delete_document(doc_id: int) -> bool:
     conn = get_db()
+    conn.execute(
+        "DELETE FROM content_access WHERE entity_type = 'document' AND entity_id = ?",
+        (doc_id,),
+    )
     cursor = conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
     conn.commit()
     conn.close()
@@ -388,6 +839,10 @@ def add_video_link(title: str, url: str, description: str = "",
 
 def delete_video_link(link_id: int) -> bool:
     conn = get_db()
+    conn.execute(
+        "DELETE FROM content_access WHERE entity_type = 'video' AND entity_id = ?",
+        (link_id,),
+    )
     cursor = conn.execute("DELETE FROM video_links WHERE id = ?", (link_id,))
     conn.commit()
     conn.close()
@@ -399,6 +854,20 @@ def update_video_link_transcript(link_id: int, transcript: str) -> dict | None:
     conn.execute(
         "UPDATE video_links SET transcript = ? WHERE id = ?",
         (transcript, link_id)
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM video_links WHERE id = ?", (link_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_video_link_description(link_id: int, description: str) -> dict | None:
+    conn = get_db()
+    conn.execute(
+        "UPDATE video_links SET description = ? WHERE id = ?",
+        (description, link_id)
     )
     conn.commit()
     row = conn.execute(
@@ -444,6 +913,10 @@ def delete_image(image_id: int) -> dict | None:
     conn = get_db()
     row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
     if row:
+        conn.execute(
+            "DELETE FROM content_access WHERE entity_type = 'image' AND entity_id = ?",
+            (image_id,),
+        )
         conn.execute("DELETE FROM images WHERE id = ?", (image_id,))
         conn.commit()
     conn.close()

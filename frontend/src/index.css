@@ -136,7 +136,7 @@ textarea::placeholder {
   position: sticky;
   top: 12px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 12px;
   padding: 12px;
   max-height: calc(100vh - 93px);
@@ -316,6 +316,48 @@ textarea::placeholder {
   background: var(--inline-code-bg);
   padding: 1px 5px;
   border-radius: 4px;
+}
+
+.toast-viewport {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  max-width: min(92vw, 380px);
+}
+
+.toast {
+  pointer-events: auto;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.35;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.toast-success {
+  background: var(--status-success-bg);
+  border-color: var(--status-success-border);
+  color: var(--success);
+}
+
+.toast-error {
+  background: var(--status-error-bg);
+  border-color: var(--status-error-border);
+  color: var(--error);
+}
+
+.toast-info {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
 }
 
 .markdown-content pre {

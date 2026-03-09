@@ -27,6 +27,66 @@ spec:
                 secretKeyRef:
                   name: quilly-support-secret
                   key: ADMIN_PASSWORD
+            - name: OAUTH_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: quilly-support-secret
+                  key: OAUTH_CLIENT_ID
+                  optional: true
+            - name: OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: quilly-support-secret
+                  key: OAUTH_CLIENT_SECRET
+                  optional: true
+            - name: OAUTH_TENANT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: quilly-support-secret
+                  key: OAUTH_TENANT_ID
+                  optional: true
+            - name: GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: quilly-support-secret
+                  key: GOOGLE_CLIENT_ID
+                  optional: true
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: quilly-support-secret
+                  key: GOOGLE_CLIENT_SECRET
+                  optional: true
+            - name: GOOGLE_REDIRECT_URI
+              valueFrom:
+                secretKeyRef:
+                  name: quilly-support-secret
+                  key: GOOGLE_REDIRECT_URI
+                  optional: true
+            - name: MICROSOFT_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: quilly-support-secret
+                  key: MICROSOFT_CLIENT_ID
+                  optional: true
+            - name: MICROSOFT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: quilly-support-secret
+                  key: MICROSOFT_CLIENT_SECRET
+                  optional: true
+            - name: MICROSOFT_TENANT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: quilly-support-secret
+                  key: MICROSOFT_TENANT_ID
+                  optional: true
+            - name: MICROSOFT_REDIRECT_URI
+              valueFrom:
+                secretKeyRef:
+                  name: quilly-support-secret
+                  key: MICROSOFT_REDIRECT_URI
+                  optional: true
           volumeMounts:
             - name: data
               mountPath: /app/backend/data

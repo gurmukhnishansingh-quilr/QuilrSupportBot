@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
+import { showToast } from '../utils/toast'
 
 export default function ImageManager({ authHeaders }) {
   const [images, setImages] = useState([])
@@ -8,13 +9,24 @@ export default function ImageManager({ authHeaders }) {
   const [previewImage, setPreviewImage] = useState(null)
   const [editingDesc, setEditingDesc] = useState(null) // { id, description }
   const [savingDesc, setSavingDesc] = useState(false)
+  const [editingAccess, setEditingAccess] = useState(null) // { id, text }
+  const [savingAccess, setSavingAccess] = useState(false)
+  const [generatingDescId, setGeneratingDescId] = useState(null)
+  const [knownUsers, setKnownUsers] = useState([])
   const fileInputRef = useRef(null)
 
   const headers = authHeaders || {}
 
   useEffect(() => {
     loadImages()
+    loadKnownUsers()
   }, [])
+
+  useEffect(() => {
+    if (!message?.text) return
+    showToast(message)
+    setMessage(null)
+  }, [message])
 
   const loadImages = async () => {
     try {
@@ -22,6 +34,16 @@ export default function ImageManager({ authHeaders }) {
       setImages(res.data)
     } catch (err) {
       setMessage({ type: 'error', text: 'Failed to load images' })
+    }
+  }
+
+  const loadKnownUsers = async () => {
+    try {
+      const res = await axios.get('/api/admin/users/activity', { headers, params: { limit: 500 } })
+      const users = (res.data?.items || []).map(item => (item.email || '').trim().toLowerCase()).filter(Boolean)
+      setKnownUsers([...new Set(users)])
+    } catch {
+      // ignore suggestions fetch errors
     }
   }
 
@@ -98,6 +120,70 @@ export default function ImageManager({ authHeaders }) {
     }
   }
 
+  const generateDescriptionFromImage = async (img) => {
+    setGeneratingDescId(img.id)
+    setMessage(null)
+    try {
+      await axios.post(`/api/admin/images/${img.id}/generate-description`, {}, { headers })
+      setMessage({ type: 'success', text: `Generated description for ${img.original_name}` })
+      loadImages()
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Failed to generate description'
+      setMessage({ type: 'error', text: detail })
+    } finally {
+      setGeneratingDescId(null)
+    }
+  }
+
+  const parseEmailList = (value) => {
+    return [...new Set(
+      (value || '')
+        .split(/[\n,;]+/)
+        .map(v => v.trim().toLowerCase())
+        .filter(Boolean)
+    )]
+  }
+
+  const accessSuggestions = (text) => {
+    const existing = parseEmailList(text)
+    const token = ((text || '').split(/[\n,;]+/).pop() || '').trim().toLowerCase()
+    return knownUsers
+      .filter(email => !existing.includes(email))
+      .filter(email => !token || email.includes(token))
+      .slice(0, 8)
+  }
+
+  const addAccessEmail = (email) => {
+    if (!editingAccess) return
+    const existing = parseEmailList(editingAccess.text)
+    if (existing.includes(email)) return
+    const next = [...existing, email].join(', ')
+    setEditingAccess({ ...editingAccess, text: next })
+  }
+
+  const saveAccess = async (img) => {
+    if (!editingAccess || editingAccess.id !== img.id) return
+    setSavingAccess(true)
+    setMessage(null)
+    try {
+      const emails = parseEmailList(editingAccess.text)
+      await axios.put(`/api/admin/images/${img.id}/access`, { emails }, { headers })
+      setEditingAccess(null)
+      setMessage({
+        type: 'success',
+        text: emails.length > 0
+          ? `Restricted access for ${img.original_name}`
+          : `Set ${img.original_name} to public access`,
+      })
+      loadImages()
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Failed to save image access'
+      setMessage({ type: 'error', text: detail })
+    } finally {
+      setSavingAccess(false)
+    }
+  }
+
   return (
     <div style={{
       background: 'var(--surface)',
@@ -140,20 +226,6 @@ export default function ImageManager({ authHeaders }) {
       <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
         Add descriptions so the chatbot can share relevant images with users.
       </p>
-
-      {message && (
-        <div style={{
-          marginBottom: '12px',
-          padding: '8px 12px',
-          borderRadius: '8px',
-          fontSize: '13px',
-          background: message.type === 'error' ? 'var(--status-error-bg)' : 'var(--status-success-bg)',
-          border: `1px solid ${message.type === 'error' ? 'var(--status-error-border)' : 'var(--status-success-border)'}`,
-          color: message.type === 'error' ? 'var(--error)' : 'var(--success)',
-        }}>
-          {message.text}
-        </div>
-      )}
 
       {images.length === 0 ? (
         <p style={{ color: 'var(--text-secondary)', fontSize: '14px', textAlign: 'center', padding: '32px 0' }}>
@@ -297,8 +369,130 @@ export default function ImageManager({ authHeaders }) {
                   </div>
                 )}
 
+                <div style={{ marginTop: '8px' }}>
+                  {editingAccess && editingAccess.id === img.id ? (
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <input
+                        value={editingAccess.text}
+                        onChange={e => setEditingAccess({ ...editingAccess, text: e.target.value })}
+                        placeholder="user1@company.com, user2@company.com"
+                        list="known-users-images"
+                        style={{
+                          flex: 1,
+                          padding: '6px 8px',
+                          borderRadius: '6px',
+                          border: '1px solid var(--border)',
+                          fontSize: '12px',
+                          outline: 'none',
+                          background: 'var(--surface)',
+                        }}
+                        onKeyDown={e => { if (e.key === 'Enter') saveAccess(img) }}
+                        autoFocus
+                      />
+                      <datalist id="known-users-images">
+                        {knownUsers.map(email => (
+                          <option key={email} value={email} />
+                        ))}
+                      </datalist>
+                      <button
+                        onClick={() => saveAccess(img)}
+                        disabled={savingAccess}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          background: 'var(--primary)',
+                          color: 'var(--on-primary)',
+                          fontSize: '11px',
+                          opacity: savingAccess ? 0.6 : 1,
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditingAccess(null)}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface)',
+                          color: 'var(--text-secondary)',
+                          fontSize: '11px',
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {img.is_restricted ? (
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          Restricted: {(img.access_emails || []).join(', ')}
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          Public: available to all users
+                        </span>
+                      )}
+                      <button
+                        onClick={() => setEditingAccess({
+                          id: img.id,
+                          text: (img.access_emails || []).join(', '),
+                        })}
+                        style={{
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface)',
+                          color: 'var(--text-secondary)',
+                          fontSize: '11px',
+                          flexShrink: 0,
+                        }}
+                      >
+                        Manage access
+                      </button>
+                    </div>
+                  )}
+                  {editingAccess && editingAccess.id === img.id && accessSuggestions(editingAccess.text).length > 0 && (
+                    <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      {accessSuggestions(editingAccess.text).map(email => (
+                        <button
+                          key={email}
+                          type="button"
+                          onClick={() => addAccessEmail(email)}
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface)',
+                            color: 'var(--text-secondary)',
+                            fontSize: '11px',
+                          }}
+                        >
+                          {email}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {/* Actions */}
                 <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
+                  <button
+                    onClick={() => generateDescriptionFromImage(img)}
+                    disabled={generatingDescId === img.id}
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface)',
+                      color: 'var(--text-secondary)',
+                      fontSize: '11px',
+                      opacity: generatingDescId === img.id ? 0.6 : 1,
+                    }}
+                  >
+                    {generatingDescId === img.id ? 'Generating...' : 'Generate from Image'}
+                  </button>
                   <button
                     onClick={() => copyUrl(img.filename)}
                     style={{

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
+import { showToast } from '../utils/toast'
 
 export default function VideoLinks({ authHeaders }) {
   const [links, setLinks] = useState([])
@@ -7,10 +8,14 @@ export default function VideoLinks({ authHeaders }) {
   const [adding, setAdding] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [updatingTranscriptId, setUpdatingTranscriptId] = useState(null)
+  const [generatingDescriptionId, setGeneratingDescriptionId] = useState(null)
   const [uploadVideoFile, setUploadVideoFile] = useState(null)
   const [uploadTranscriptFile, setUploadTranscriptFile] = useState(null)
   const [transcriptDrafts, setTranscriptDrafts] = useState({})
   const [transcriptFiles, setTranscriptFiles] = useState({})
+  const [editingAccess, setEditingAccess] = useState(null) // { id, text }
+  const [savingAccessId, setSavingAccessId] = useState(null)
+  const [knownUsers, setKnownUsers] = useState([])
   const [message, setMessage] = useState(null)
   const videoInputRef = useRef(null)
   const transcriptInputRef = useRef(null)
@@ -20,7 +25,14 @@ export default function VideoLinks({ authHeaders }) {
 
   useEffect(() => {
     loadLinks()
+    loadKnownUsers()
   }, [])
+
+  useEffect(() => {
+    if (!message?.text) return
+    showToast(message)
+    setMessage(null)
+  }, [message])
 
   const loadLinks = async () => {
     try {
@@ -43,6 +55,16 @@ export default function VideoLinks({ authHeaders }) {
       })
     } catch {
       setMessage({ type: 'error', text: 'Failed to load video links' })
+    }
+  }
+
+  const loadKnownUsers = async () => {
+    try {
+      const res = await axios.get('/api/admin/users/activity', { headers, params: { limit: 500 } })
+      const users = (res.data?.items || []).map(item => (item.email || '').trim().toLowerCase()).filter(Boolean)
+      setKnownUsers([...new Set(users)])
+    } catch {
+      // ignore suggestions fetch errors
     }
   }
 
@@ -137,6 +159,73 @@ export default function VideoLinks({ authHeaders }) {
       setMessage({ type: 'error', text: detail })
     } finally {
       setUpdatingTranscriptId(null)
+    }
+  }
+
+  const generateDescription = async (link) => {
+    setGeneratingDescriptionId(link.id)
+    setMessage(null)
+    try {
+      const res = await axios.post(`/api/admin/video-links/${link.id}/generate-description`, {}, { headers })
+      setMessage({
+        type: 'success',
+        text: `Generated description for "${res.data.title}"`,
+      })
+      loadLinks()
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Failed to generate description'
+      setMessage({ type: 'error', text: detail })
+    } finally {
+      setGeneratingDescriptionId(null)
+    }
+  }
+
+  const parseEmailList = (value) => {
+    return [...new Set(
+      (value || '')
+        .split(/[\n,;]+/)
+        .map(v => v.trim().toLowerCase())
+        .filter(Boolean)
+    )]
+  }
+
+  const accessSuggestions = (text) => {
+    const existing = parseEmailList(text)
+    const token = ((text || '').split(/[\n,;]+/).pop() || '').trim().toLowerCase()
+    return knownUsers
+      .filter(email => !existing.includes(email))
+      .filter(email => !token || email.includes(token))
+      .slice(0, 8)
+  }
+
+  const addAccessEmail = (email) => {
+    if (!editingAccess) return
+    const existing = parseEmailList(editingAccess.text)
+    if (existing.includes(email)) return
+    const next = [...existing, email].join(', ')
+    setEditingAccess({ ...editingAccess, text: next })
+  }
+
+  const saveAccess = async (link) => {
+    if (!editingAccess || editingAccess.id !== link.id) return
+    setSavingAccessId(link.id)
+    setMessage(null)
+    try {
+      const emails = parseEmailList(editingAccess.text)
+      await axios.put(`/api/admin/video-links/${link.id}/access`, { emails }, { headers })
+      setEditingAccess(null)
+      setMessage({
+        type: 'success',
+        text: emails.length > 0
+          ? `Restricted access for "${link.title}"`
+          : `Set "${link.title}" to public access`,
+      })
+      loadLinks()
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Failed to save video access'
+      setMessage({ type: 'error', text: detail })
+    } finally {
+      setSavingAccessId(null)
     }
   }
 
@@ -304,6 +393,104 @@ export default function VideoLinks({ authHeaders }) {
                   </div>
                 )}
                 <div style={{ marginTop: '8px' }}>
+                  {editingAccess && editingAccess.id === link.id ? (
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <input
+                        value={editingAccess.text}
+                        onChange={e => setEditingAccess({ ...editingAccess, text: e.target.value })}
+                        placeholder="user1@company.com, user2@company.com"
+                        list="known-users-videos"
+                        style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }}
+                        onKeyDown={e => { if (e.key === 'Enter') saveAccess(link) }}
+                        autoFocus
+                      />
+                      <datalist id="known-users-videos">
+                        {knownUsers.map(email => (
+                          <option key={email} value={email} />
+                        ))}
+                      </datalist>
+                      <button
+                        onClick={() => saveAccess(link)}
+                        disabled={savingAccessId === link.id}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          background: 'var(--primary)',
+                          color: 'var(--on-primary)',
+                          fontSize: '11px',
+                          opacity: savingAccessId === link.id ? 0.6 : 1,
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditingAccess(null)}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface)',
+                          color: 'var(--text-secondary)',
+                          fontSize: '11px',
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {link.is_restricted ? (
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          Restricted: {(link.access_emails || []).join(', ')}
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          Public: available to all users
+                        </span>
+                      )}
+                      <button
+                        onClick={() => setEditingAccess({
+                          id: link.id,
+                          text: (link.access_emails || []).join(', '),
+                        })}
+                        style={{
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface)',
+                          color: 'var(--text-secondary)',
+                          fontSize: '11px',
+                          flexShrink: 0,
+                        }}
+                      >
+                        Manage access
+                      </button>
+                    </div>
+                  )}
+                  {editingAccess && editingAccess.id === link.id && accessSuggestions(editingAccess.text).length > 0 && (
+                    <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      {accessSuggestions(editingAccess.text).map(email => (
+                        <button
+                          key={email}
+                          type="button"
+                          onClick={() => addAccessEmail(email)}
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface)',
+                            color: 'var(--text-secondary)',
+                            fontSize: '11px',
+                          }}
+                        >
+                          {email}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div style={{ marginTop: '8px' }}>
                   <textarea
                     style={{ ...inputStyle, minHeight: '72px', resize: 'vertical', fontSize: '12px' }}
                     value={transcriptDrafts[link.id] || ''}
@@ -347,6 +534,21 @@ export default function VideoLinks({ authHeaders }) {
                       }}
                     >
                       {updatingTranscriptId === link.id ? 'Saving...' : 'Save Transcript'}
+                    </button>
+                    <button
+                      onClick={() => generateDescription(link)}
+                      disabled={generatingDescriptionId === link.id || !(link.transcript || '').trim()}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--text)',
+                        fontSize: '12px',
+                        opacity: generatingDescriptionId === link.id || !(link.transcript || '').trim() ? 0.6 : 1,
+                      }}
+                    >
+                      {generatingDescriptionId === link.id ? 'Generating...' : 'Generate Description'}
                     </button>
                     <button
                       onClick={() => setTranscriptDrafts(prev => ({ ...prev, [link.id]: '' }))}
@@ -444,20 +646,6 @@ export default function VideoLinks({ authHeaders }) {
             />
           </div>
         </div>
-
-        {message && (
-          <div style={{
-            marginTop: '12px',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            fontSize: '13px',
-            background: message.type === 'error' ? 'var(--status-error-bg)' : 'var(--status-success-bg)',
-            border: `1px solid ${message.type === 'error' ? 'var(--status-error-border)' : 'var(--status-success-border)'}`,
-            color: message.type === 'error' ? 'var(--error)' : 'var(--success)',
-          }}>
-            {message.text}
-          </div>
-        )}
 
         <button
           type="submit"

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
+import { showToast } from '../utils/toast'
 
 export default function LLMConfig({ authHeaders }) {
   const [config, setConfig] = useState({
@@ -15,7 +16,6 @@ export default function LLMConfig({ authHeaders }) {
   const [masked, setMasked] = useState('')
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState(null)
   const [message, setMessage] = useState(null)
 
   const headers = authHeaders || {}
@@ -23,6 +23,12 @@ export default function LLMConfig({ authHeaders }) {
   useEffect(() => {
     loadConfig()
   }, [])
+
+  useEffect(() => {
+    if (!message?.text) return
+    showToast(message)
+    setMessage(null)
+  }, [message])
 
   const loadConfig = async () => {
     try {
@@ -70,12 +76,21 @@ export default function LLMConfig({ authHeaders }) {
 
   const testConnection = async () => {
     setTesting(true)
-    setTestResult(null)
     try {
       const res = await axios.post('/api/admin/test-connection', {}, { headers })
-      setTestResult(res.data)
+      if (res.data?.success) {
+        showToast({
+          type: 'success',
+          text: `Connection successful (${res.data.model || 'model'})`,
+        })
+      } else {
+        showToast({
+          type: 'error',
+          text: res.data?.error || 'Connection failed',
+        })
+      }
     } catch (err) {
-      setTestResult({ success: false, error: 'Request failed' })
+      showToast({ type: 'error', text: 'Request failed' })
     } finally {
       setTesting(false)
     }
@@ -248,20 +263,6 @@ export default function LLMConfig({ authHeaders }) {
           </div>
         </div>
 
-        {message && (
-          <div style={{
-            marginTop: '12px',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            fontSize: '13px',
-            background: message.type === 'error' ? 'var(--status-error-bg)' : 'var(--status-success-bg)',
-            border: `1px solid ${message.type === 'error' ? 'var(--status-error-border)' : 'var(--status-success-border)'}`,
-            color: message.type === 'error' ? 'var(--error)' : 'var(--success)',
-          }}>
-            {message.text}
-          </div>
-        )}
-
         <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
           <button
             type="submit"
@@ -298,33 +299,6 @@ export default function LLMConfig({ authHeaders }) {
           </button>
         </div>
       </form>
-
-      {testResult && (
-        <div style={{
-          marginTop: '12px',
-          padding: '12px',
-          borderRadius: '8px',
-          fontSize: '13px',
-          background: testResult.success ? 'var(--status-success-bg)' : 'var(--status-error-bg)',
-          border: `1px solid ${testResult.success ? 'var(--status-success-border)' : 'var(--status-error-border)'}`,
-        }}>
-          {testResult.success ? (
-            <div>
-              <strong style={{ color: 'var(--success)' }}>Connection successful</strong>
-              <p style={{ marginTop: '4px', color: 'var(--text-secondary)' }}>
-                Model: {testResult.model} — Response: {testResult.response}
-              </p>
-            </div>
-          ) : (
-            <div>
-              <strong style={{ color: 'var(--error)' }}>Connection failed</strong>
-              <p style={{ marginTop: '4px', color: 'var(--text-secondary)' }}>
-                {testResult.error}
-              </p>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 }

@@ -1,11 +1,15 @@
 import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import ChatMessage from '../components/ChatMessage'
+import { showToast } from '../utils/toast'
 
 export default function Chat() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [providers, setProviders] = useState({ google: { enabled: false }, microsoft: { enabled: false } })
+  const [authLoading, setAuthLoading] = useState(true)
+  const [authUser, setAuthUser] = useState(null)
   const messagesEndRef = useRef(null)
 
   const scrollToBottom = () => {
@@ -15,6 +19,65 @@ export default function Chat() {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('auth') === 'success') {
+      showToast({ type: 'success', text: 'Signed in successfully.' })
+    }
+    if (params.get('auth_error')) {
+      showToast({ type: 'error', text: params.get('auth_error') })
+    }
+    if (params.get('auth') || params.get('auth_error')) {
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
+
+  useEffect(() => {
+    const loadAuth = async () => {
+      setAuthLoading(true)
+      try {
+        const [providersRes, sessionRes] = await Promise.all([
+          fetch('/api/auth/providers'),
+          fetch('/api/auth/session'),
+        ])
+
+        if (providersRes.ok) {
+          setProviders(await providersRes.json())
+        }
+
+        if (sessionRes.ok) {
+          const session = await sessionRes.json()
+          if (session.authenticated && session.user) {
+            setAuthUser(session.user)
+          } else {
+            setAuthUser(null)
+          }
+        }
+      } catch {
+        setProviders({ google: { enabled: false }, microsoft: { enabled: false } })
+        setAuthUser(null)
+      } finally {
+        setAuthLoading(false)
+      }
+    }
+    loadAuth()
+  }, [])
+
+  const startSignIn = (provider) => {
+    const nextPath = window.location.pathname || '/'
+    window.location.href = `/api/auth/${provider}/start?next=${encodeURIComponent(nextPath)}`
+  }
+
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+      setAuthUser(null)
+      showToast({ type: 'success', text: 'Signed out.' })
+    } catch {
+      showToast({ type: 'error', text: 'Sign out failed.' })
+    }
+  }
 
   const sendMessage = async (e) => {
     e.preventDefault()
@@ -26,7 +89,6 @@ export default function Chat() {
     setLoading(true)
 
     // Add placeholder for assistant
-    const assistantIndex = messages.length + 1
     setMessages(prev => [...prev, { role: 'assistant', content: '', sources: [] }])
 
     try {
@@ -128,16 +190,77 @@ export default function Chat() {
             </p>
           </div>
         </div>
-        <Link to="/admin" style={{
-          fontSize: '13px',
-          color: 'var(--text-secondary)',
-          textDecoration: 'none',
-          padding: '6px 12px',
-          borderRadius: '6px',
-          border: '1px solid var(--border)',
-        }}>
-          Admin
-        </Link>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {!authLoading && !authUser && providers.google?.enabled && (
+            <button
+              type="button"
+              onClick={() => startSignIn('google')}
+              style={{
+                fontSize: '12px',
+                color: 'var(--text)',
+                padding: '6px 10px',
+                borderRadius: '6px',
+                border: '1px solid var(--border)',
+                background: 'var(--surface)',
+              }}
+            >
+              Sign in with Google
+            </button>
+          )}
+          {!authLoading && !authUser && providers.microsoft?.enabled && (
+            <button
+              type="button"
+              onClick={() => startSignIn('microsoft')}
+              style={{
+                fontSize: '12px',
+                color: 'var(--text)',
+                padding: '6px 10px',
+                borderRadius: '6px',
+                border: '1px solid var(--border)',
+                background: 'var(--surface)',
+              }}
+            >
+              Sign in with Microsoft
+            </button>
+          )}
+          {!authLoading && authUser && (
+            <>
+              <div style={{
+                fontSize: '12px',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border)',
+                borderRadius: '6px',
+                padding: '6px 10px',
+              }}>
+                {authUser.name || authUser.email || 'Signed in'} ({authUser.provider})
+              </div>
+              <button
+                type="button"
+                onClick={logout}
+                style={{
+                  fontSize: '12px',
+                  color: 'var(--text)',
+                  padding: '6px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                }}
+              >
+                Sign out
+              </button>
+            </>
+          )}
+          <Link to="/admin" style={{
+            fontSize: '13px',
+            color: 'var(--text-secondary)',
+            textDecoration: 'none',
+            padding: '6px 12px',
+            borderRadius: '6px',
+            border: '1px solid var(--border)',
+          }}>
+            Admin
+          </Link>
+        </div>
       </div>
 
       {/* Messages */}

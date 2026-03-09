@@ -1,10 +1,27 @@
 import json
+import base64
+import mimetypes
+import os
 from openai import OpenAI, AzureOpenAI
-from config import get_llm_config, list_video_links, get_document_links, list_images
+from config import (
+    get_llm_config, list_video_links, get_document_links, list_images,
+    list_documents, filter_items_by_access_email,
+)
 from embeddings import search_similar
 
 VIDEO_TRANSCRIPT_SNIPPET_CHARS = 1200
 VIDEO_TRANSCRIPT_TOTAL_CHARS = 4000
+DESCRIPTION_TRANSCRIPT_CHARS = 12000
+DESCRIPTION_MAX_CHARS = 220
+IMAGE_DESCRIPTION_MAX_BYTES = 8 * 1024 * 1024
+VISION_SUPPORTED_MIME_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+}
+SVG_MIME_TYPES = {"image/svg+xml", "image/svg"}
+SVG_MAX_CHARS = 30000
 
 
 def _get_client(config):
@@ -97,7 +114,7 @@ def _trim_snippet_to_budget(snippet: str, remaining_chars: int) -> str:
     return snippet[:remaining_chars - 3].rstrip() + "..."
 
 
-async def chat_stream(question: str):
+async def chat_stream(question: str, user_email: str = ""):
     """RAG pipeline: retrieve context, call LLM, yield streamed response."""
     config = get_llm_config()
 
@@ -105,21 +122,46 @@ async def chat_stream(question: str):
         yield f"data: {json.dumps({'type': 'error', 'content': 'LLM not configured. Please set up the LLM provider in the Admin console.'})}\n\n"
         return
 
+    # Resolve visible content for current user.
+    visible_documents = filter_items_by_access_email("document", list_documents(), user_email)
+    visible_videos = filter_items_by_access_email("video", list_video_links(), user_email)
+    visible_images = filter_items_by_access_email("image", list_images(), user_email)
+    allowed_doc_filenames = {doc.get("filename", "") for doc in visible_documents}
+    allowed_video_ids = {int(v["id"]) for v in visible_videos if v.get("id") is not None}
+
     # Retrieve relevant chunks
     include_video_transcripts = bool(config.get("include_video_transcripts_in_rag"))
     chunks = search_similar(question, n_results=5,
                             include_video_transcripts=include_video_transcripts)
-    context, sources = build_context(chunks)
+    filtered_chunks = []
+    for chunk in chunks:
+        metadata = chunk.get("metadata") or {}
+        source_type = metadata.get("source_type")
+        if source_type == "video_transcript":
+            try:
+                video_id = int(metadata.get("video_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if video_id not in allowed_video_ids:
+                continue
+            filtered_chunks.append(chunk)
+            continue
+
+        filename = (metadata.get("filename") or "").strip()
+        if not filename or filename not in allowed_doc_filenames:
+            continue
+        filtered_chunks.append(chunk)
+
+    context, sources = build_context(filtered_chunks)
 
     # Send sources first
     yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
     # Build video links section
-    videos = list_video_links()
-    if videos:
+    if visible_videos:
         video_lines = ["", "Available demo/tutorial videos:"]
         transcript_budget = VIDEO_TRANSCRIPT_TOTAL_CHARS
-        for v in videos:
+        for v in visible_videos:
             line = f"- {v['title']}: {v['url']}"
             if v.get("description"):
                 line += f" — {v['description']}"
@@ -135,8 +177,7 @@ async def chat_stream(question: str):
         video_section = ""
 
     # Build image section
-    images = list_images()
-    images_with_desc = [img for img in images if img.get("description")]
+    images_with_desc = [img for img in visible_images if img.get("description")]
     if images_with_desc:
         image_lines = ["", "Available images/screenshots (use markdown ![alt](url) to display them):"]
         for img in images_with_desc:
@@ -203,3 +244,159 @@ async def test_llm_connection() -> dict:
 
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def _normalize_generated_description(text: str) -> str:
+    clean = " ".join((text or "").split()).strip()
+    if clean.startswith('"') and clean.endswith('"'):
+        clean = clean[1:-1].strip()
+    if len(clean) > DESCRIPTION_MAX_CHARS:
+        clean = clean[:DESCRIPTION_MAX_CHARS].rstrip()
+    return clean
+
+
+def generate_description_from_transcript(transcript: str, content_type: str,
+                                         title: str = "") -> str:
+    config = get_llm_config()
+    if not config.get("provider_url") or not config.get("model_name"):
+        raise ValueError("LLM is not configured. Configure provider URL and model first.")
+
+    transcript_clean = " ".join((transcript or "").split()).strip()
+    if not transcript_clean:
+        raise ValueError("Transcript text is required to generate a description.")
+    if len(transcript_clean) > DESCRIPTION_TRANSCRIPT_CHARS:
+        transcript_clean = transcript_clean[:DESCRIPTION_TRANSCRIPT_CHARS].rstrip()
+
+    prompt = (
+        f"Content type: {content_type}\n"
+        f"Title: {title or 'N/A'}\n\n"
+        "Transcript:\n"
+        f"{transcript_clean}\n\n"
+        f"Generate one concise admin-friendly description (max {DESCRIPTION_MAX_CHARS} characters). "
+        "Return only the description text."
+    )
+
+    client = _get_client(config)
+    response = client.chat.completions.create(
+        model=config["model_name"],
+        messages=[
+            {
+                "role": "system",
+                "content": "You write concise, factual descriptions for support content.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.3,
+        max_tokens=120,
+    )
+    raw = response.choices[0].message.content if response.choices else ""
+    description = _normalize_generated_description(raw or "")
+    if not description:
+        raise ValueError("Description generation returned empty output.")
+    return description
+
+
+def generate_description_from_image(image_path: str, title: str = "") -> str:
+    config = get_llm_config()
+    if not config.get("provider_url") or not config.get("model_name"):
+        raise ValueError("LLM is not configured. Configure provider URL and model first.")
+    if not os.path.isfile(image_path):
+        raise ValueError("Image file not found.")
+
+    file_size = os.path.getsize(image_path)
+    if file_size > IMAGE_DESCRIPTION_MAX_BYTES:
+        raise ValueError(f"Image is too large. Maximum supported size is {IMAGE_DESCRIPTION_MAX_BYTES} bytes.")
+
+    mime_type = (mimetypes.guess_type(image_path)[0] or "").lower().strip()
+    ext = os.path.splitext(image_path)[1].lower()
+    if not mime_type and ext == ".svg":
+        mime_type = "image/svg+xml"
+    if mime_type == "image/jpg":
+        mime_type = "image/jpeg"
+    if mime_type in SVG_MIME_TYPES or ext == ".svg":
+        with open(image_path, "r", encoding="utf-8", errors="replace") as f:
+            svg_text = f.read()
+        compact_svg = " ".join(svg_text.split())
+        if len(compact_svg) > SVG_MAX_CHARS:
+            compact_svg = compact_svg[:SVG_MAX_CHARS].rstrip() + "..."
+
+        svg_prompt = (
+            f"Image title: {title or 'N/A'}\n"
+            f"SVG markup snippet:\n{compact_svg}\n\n"
+            f"Generate one concise admin-friendly description (max {DESCRIPTION_MAX_CHARS} characters) "
+            "for what this SVG likely depicts in a support context. Return only the description text."
+        )
+        client = _get_client(config)
+        response = client.chat.completions.create(
+            model=config["model_name"],
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You write concise, factual descriptions for support images/screenshots.",
+                },
+                {"role": "user", "content": svg_prompt},
+            ],
+            temperature=0.2,
+            max_tokens=120,
+        )
+        raw = response.choices[0].message.content if response.choices else ""
+        description = _normalize_generated_description(raw or "")
+        if not description:
+            raise ValueError("Description generation returned empty output.")
+        return description
+
+    if mime_type not in VISION_SUPPORTED_MIME_TYPES:
+        raise ValueError(
+            f"Unsupported image format for description generation ({ext or 'unknown'}). "
+            "Use PNG, JPG/JPEG, WEBP, GIF, or SVG."
+        )
+
+    with open(image_path, "rb") as f:
+        image_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    prompt = (
+        f"Image title: {title or 'N/A'}\n"
+        f"Generate one concise admin-friendly description (max {DESCRIPTION_MAX_CHARS} characters). "
+        "Focus on what the screenshot/image shows so a support bot can decide when to share it. "
+        "Return only the description text."
+    )
+
+    client = _get_client(config)
+    try:
+        response = client.chat.completions.create(
+            model=config["model_name"],
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You write concise, factual descriptions for support images/screenshots.",
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{image_b64}",
+                                "detail": "auto",
+                            },
+                        },
+                    ],
+                },
+            ],
+            temperature=0.2,
+            max_tokens=120,
+        )
+    except Exception as e:
+        msg = str(e)
+        if "Invalid image data" in msg:
+            raise ValueError(
+                "Model rejected the image data. Ensure the image is a valid PNG/JPG/WEBP/GIF "
+                "and use a vision-capable model (for example: gpt-4o or gpt-4.1)."
+            )
+        raise
+    raw = response.choices[0].message.content if response.choices else ""
+    description = _normalize_generated_description(raw or "")
+    if not description:
+        raise ValueError("Description generation returned empty output.")
+    return description

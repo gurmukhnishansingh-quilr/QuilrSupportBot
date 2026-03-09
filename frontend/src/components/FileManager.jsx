@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
+import { showToast } from '../utils/toast'
 
 export default function FileManager({ authHeaders }) {
   const [documents, setDocuments] = useState([])
@@ -7,12 +8,22 @@ export default function FileManager({ authHeaders }) {
   const [reindexing, setReindexing] = useState(false)
   const [message, setMessage] = useState(null)
   const fileInputRef = useRef(null)
+  const [editingAccess, setEditingAccess] = useState(null) // { id, text }
+  const [savingAccess, setSavingAccess] = useState(false)
+  const [knownUsers, setKnownUsers] = useState([])
 
   const headers = authHeaders || {}
 
   useEffect(() => {
     loadDocuments()
+    loadKnownUsers()
   }, [])
+
+  useEffect(() => {
+    if (!message?.text) return
+    showToast(message)
+    setMessage(null)
+  }, [message])
 
   const loadDocuments = async () => {
     try {
@@ -20,6 +31,16 @@ export default function FileManager({ authHeaders }) {
       setDocuments(res.data)
     } catch (err) {
       setMessage({ type: 'error', text: 'Failed to load documents' })
+    }
+  }
+
+  const loadKnownUsers = async () => {
+    try {
+      const res = await axios.get('/api/admin/users/activity', { headers, params: { limit: 500 } })
+      const users = (res.data?.items || []).map(item => (item.email || '').trim().toLowerCase()).filter(Boolean)
+      setKnownUsers([...new Set(users)])
+    } catch {
+      // ignore user suggestions fetch errors
     }
   }
 
@@ -90,6 +111,52 @@ export default function FileManager({ authHeaders }) {
       setMessage({ type: 'error', text: 'Failed to save link' })
     } finally {
       setSavingLink(false)
+    }
+  }
+
+  const parseEmailList = (value) => {
+    return [...new Set(
+      (value || '')
+        .split(/[\n,;]+/)
+        .map(v => v.trim().toLowerCase())
+        .filter(Boolean)
+    )]
+  }
+
+  const accessSuggestions = (text) => {
+    const existing = parseEmailList(text)
+    const token = ((text || '').split(/[\n,;]+/).pop() || '').trim().toLowerCase()
+    return knownUsers
+      .filter(email => !existing.includes(email))
+      .filter(email => !token || email.includes(token))
+      .slice(0, 8)
+  }
+
+  const addAccessEmail = (email) => {
+    if (!editingAccess) return
+    const existing = parseEmailList(editingAccess.text)
+    if (existing.includes(email)) return
+    const next = [...existing, email].join(', ')
+    setEditingAccess({ ...editingAccess, text: next })
+  }
+
+  const saveAccess = async (docId) => {
+    if (!editingAccess || editingAccess.id !== docId) return
+    setSavingAccess(true)
+    try {
+      const emails = parseEmailList(editingAccess.text)
+      await axios.put(`/api/admin/documents/${docId}/access`, { emails }, { headers })
+      setEditingAccess(null)
+      setMessage({
+        type: 'success',
+        text: emails.length > 0 ? 'Document access restricted to selected users' : 'Document access set to public',
+      })
+      loadDocuments()
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Failed to save document access'
+      setMessage({ type: 'error', text: detail })
+    } finally {
+      setSavingAccess(false)
     }
   }
 
@@ -169,20 +236,6 @@ export default function FileManager({ authHeaders }) {
           style={{ display: 'none' }}
         />
       </div>
-
-      {message && (
-        <div style={{
-          marginBottom: '12px',
-          padding: '8px 12px',
-          borderRadius: '8px',
-          fontSize: '13px',
-          background: message.type === 'error' ? 'var(--status-error-bg)' : 'var(--status-success-bg)',
-          border: `1px solid ${message.type === 'error' ? 'var(--status-error-border)' : 'var(--status-success-border)'}`,
-          color: message.type === 'error' ? 'var(--error)' : 'var(--success)',
-        }}>
-          {message.text}
-        </div>
-      )}
 
       {documents.length === 0 ? (
         <p style={{ color: 'var(--text-secondary)', fontSize: '14px', textAlign: 'center', padding: '32px 0' }}>
@@ -314,6 +367,115 @@ export default function FileManager({ authHeaders }) {
                       {doc.link ? 'Edit' : 'Add link'}
                     </button>
                   </>
+                )}
+              </div>
+
+              <div style={{ marginTop: '8px' }}>
+                {editingAccess && editingAccess.id === doc.id ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <input
+                      type="text"
+                      value={editingAccess.text}
+                      onChange={e => setEditingAccess({ ...editingAccess, text: e.target.value })}
+                      placeholder="user1@company.com, user2@company.com"
+                      list="known-users-documents"
+                      style={{
+                        flex: 1,
+                        padding: '5px 8px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border)',
+                        fontSize: '12px',
+                        outline: 'none',
+                        background: 'var(--surface)',
+                      }}
+                      onKeyDown={e => { if (e.key === 'Enter') saveAccess(doc.id) }}
+                      autoFocus
+                    />
+                    <datalist id="known-users-documents">
+                      {knownUsers.map(email => (
+                        <option key={email} value={email} />
+                      ))}
+                    </datalist>
+                    <button
+                      onClick={() => saveAccess(doc.id)}
+                      disabled={savingAccess}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: 'var(--primary)',
+                        color: 'var(--on-primary)',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        opacity: savingAccess ? 0.6 : 1,
+                      }}
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => setEditingAccess(null)}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--text-secondary)',
+                        fontSize: '11px',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {doc.is_restricted ? (
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        Restricted: {(doc.access_emails || []).join(', ')}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        Public: available to all users
+                      </span>
+                    )}
+                    <button
+                      onClick={() => setEditingAccess({
+                        id: doc.id,
+                        text: (doc.access_emails || []).join(', '),
+                      })}
+                      style={{
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--text-secondary)',
+                        fontSize: '11px',
+                        flexShrink: 0,
+                      }}
+                    >
+                      Manage access
+                    </button>
+                  </div>
+                )}
+                {editingAccess && editingAccess.id === doc.id && accessSuggestions(editingAccess.text).length > 0 && (
+                  <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {accessSuggestions(editingAccess.text).map(email => (
+                      <button
+                        key={email}
+                        type="button"
+                        onClick={() => addAccessEmail(email)}
+                        style={{
+                          padding: '2px 8px',
+                          borderRadius: '999px',
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface)',
+                          color: 'var(--text-secondary)',
+                          fontSize: '11px',
+                        }}
+                      >
+                        {email}
+                      </button>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
